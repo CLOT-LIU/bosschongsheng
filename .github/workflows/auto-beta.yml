@@ -45,16 +45,12 @@ jobs:
         run: |
           # 只统计影响模组本体的提交；workflow、说明文档等仓库维护类改动不触发 beta
           EXCLUDES="-- . ':(exclude).github/**' ':(exclude).gitignore' ':(exclude).gitattributes' ':(exclude)README.md' ':(exclude)LICENSE'"
-          if [ "${{ steps.version.outputs.last_tag }}" = "v0.0.0" ]; then
+          # 更新说明只取上一个标签（含 beta）之后的新提交，避免每个 beta 重复列出旧提交
+          LAST_TAG="${{ steps.version.outputs.last_tag }}"
+          if [ "$LAST_TAG" = "v0.0.0" ]; then
             eval git log --format=%s $EXCLUDES > commits.txt
           else
-            # 更新说明取上一个正式版（非 -beta）标签之后的提交，避免与上个 beta 重复
-            LAST_STABLE=$(git tag --sort=-creatordate | grep -v -- '-beta' | head -n 1 || true)
-            if [ -z "$LAST_STABLE" ]; then
-              eval git log --format=%s $EXCLUDES > commits.txt
-            else
-              eval git log "$LAST_STABLE"..HEAD --format=%s $EXCLUDES > commits.txt
-            fi
+            eval git log "$LAST_TAG"..HEAD --format=%s $EXCLUDES > commits.txt
           fi
           COUNT=$(wc -l < commits.txt | tr -d ' ')
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
