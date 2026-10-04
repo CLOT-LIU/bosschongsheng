@@ -113,6 +113,13 @@ public class RulePickerScreen extends Screen {
         this.selectedItemId = preItemId != null ? preItemId : "";
         this.selectedEntityId = preEntityId != null ? preEntityId : "";
 
+        // 编辑规则时把已选中的项固定到列表第一位，且滚动条置顶
+        if (isEdit) {
+            scrollStructure = 0;
+            scrollItem = 0;
+            scrollEntity = 0;
+        }
+
         structureIds.addAll(BossRespawnConfigClient.getStructureIds());
         filteredStructures.addAll(structureIds);
 
@@ -314,52 +321,81 @@ public class RulePickerScreen extends Screen {
         return true;
     }
 
+    /** 编辑规则时把已选中的项固定到列表第一位（不受搜索/排序影响） */
+    private static <T> List<T> pinSelectedFirst(List<T> list, java.util.function.Predicate<T> isSelected) {
+        if (list.isEmpty()) {
+            return list;
+        }
+        for (int i = 0; i < list.size(); i++) {
+            if (isSelected.test(list.get(i))) {
+                if (i == 0) {
+                    return list;
+                }
+                List<T> result = new ArrayList<>(list.size());
+                result.add(list.get(i));
+                for (int j = 0; j < list.size(); j++) {
+                    if (j != i) {
+                        result.add(list.get(j));
+                    }
+                }
+                return result;
+            }
+        }
+        return list;
+    }
+
     private void refreshStructureFilter() {
         Query q = parseQuery(searchStructure != null ? searchStructure.getValue() : "");
         int sort = sortMode[0];
-        filteredStructures = structureIds.stream()
-                .filter(id -> matchesSource(id, q.sources()))
-                .filter(id -> q.text().isEmpty()
-                        || id.toLowerCase(Locale.ROOT).contains(q.text())
-                        || DisplayNames.structure(id).toLowerCase(Locale.ROOT).contains(q.text()))
-                .sorted(Comparator
-                        .comparingInt((String id) -> sort == SORT_DIMENSION ? dimensionOfStructure(id) : 0)
-                        .thenComparing(id -> sort == SORT_SOURCE
-                                ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
-                        .thenComparing(DisplayNames::structure))
-                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        filteredStructures = pinSelectedFirst(
+                structureIds.stream()
+                        .filter(id -> matchesSource(id, q.sources()))
+                        .filter(id -> q.text().isEmpty()
+                                || id.toLowerCase(Locale.ROOT).contains(q.text())
+                                || DisplayNames.structure(id).toLowerCase(Locale.ROOT).contains(q.text()))
+                        .sorted(Comparator
+                                .comparingInt((String id) -> sort == SORT_DIMENSION ? dimensionOfStructure(id) : 0)
+                                .thenComparing(id -> sort == SORT_SOURCE
+                                        ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
+                                .thenComparing(DisplayNames::structure))
+                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new)),
+                id -> id.equals(selectedStructureId));
         scrollStructure = Math.min(scrollStructure, scrollMax(0));
     }
 
     private void refreshItemFilter() {
         Query q = parseQuery(searchItem != null ? searchItem.getValue() : "");
         int sort = sortMode[1];
-        filteredItems = allItems.stream()
-                .filter(e -> matchesSource(e.id(), q.sources()))
-                .filter(e -> q.text().isEmpty()
-                        || e.id().toLowerCase(Locale.ROOT).contains(q.text())
-                        || e.stack().getHoverName().getString().toLowerCase(Locale.ROOT).contains(q.text()))
-                .sorted(Comparator
-                        .comparing((ItemEntry e) -> sort == SORT_SOURCE
-                                ? namespaceOf(e.id()).toLowerCase(Locale.ROOT) : "")
-                        .thenComparing(e -> e.stack().getHoverName().getString()))
-                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        filteredItems = pinSelectedFirst(
+                allItems.stream()
+                        .filter(e -> matchesSource(e.id(), q.sources()))
+                        .filter(e -> q.text().isEmpty()
+                                || e.id().toLowerCase(Locale.ROOT).contains(q.text())
+                                || e.stack().getHoverName().getString().toLowerCase(Locale.ROOT).contains(q.text()))
+                        .sorted(Comparator
+                                .comparing((ItemEntry e) -> sort == SORT_SOURCE
+                                        ? namespaceOf(e.id()).toLowerCase(Locale.ROOT) : "")
+                                .thenComparing(e -> e.stack().getHoverName().getString()))
+                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new)),
+                e -> e.id().equals(selectedItemId));
         scrollItem = Math.min(scrollItem, scrollMax(1));
     }
 
     private void refreshEntityFilter() {
         Query q = parseQuery(searchEntity != null ? searchEntity.getValue() : "");
         int sort = sortMode[2];
-        filteredEntities = allEntities.stream()
-                .filter(id -> matchesSource(id, q.sources()))
-                .filter(id -> q.text().isEmpty()
-                        || id.toLowerCase(Locale.ROOT).contains(q.text())
-                        || entityName(id).toLowerCase(Locale.ROOT).contains(q.text()))
-                .sorted(Comparator
-                        .comparing((String id) -> sort == SORT_SOURCE
-                                ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
-                        .thenComparing(RulePickerScreen::entityName))
-                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        filteredEntities = pinSelectedFirst(
+                allEntities.stream()
+                        .filter(id -> matchesSource(id, q.sources()))
+                        .filter(id -> q.text().isEmpty()
+                                || id.toLowerCase(Locale.ROOT).contains(q.text())
+                                || entityName(id).toLowerCase(Locale.ROOT).contains(q.text()))
+                        .sorted(Comparator
+                                .comparing((String id) -> sort == SORT_SOURCE
+                                        ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
+                                .thenComparing(RulePickerScreen::entityName))
+                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new)),
+                id -> id.equals(selectedEntityId));
         scrollEntity = Math.min(scrollEntity, scrollMax(2));
     }
 
