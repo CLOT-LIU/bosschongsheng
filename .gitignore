@@ -1,0 +1,76 @@
+### Gradle ###
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/**/out/
+.run/
+
+### Eclipse ###
+.apt_generated/
+.classpath
+.eclipse/
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache/
+.metadata/
+.externalToolBuilders/
+*.launch
+bin/
+!**/src/**/bin/
+
+### VS Code ###
+.vscode/
+
+### Minecraft Mod 开发 ###
+run/
+run-data/
+!**/src/**/run/
+**/src/generated/**/.cache/
+repo/
+!**/src/**/repo/
+
+### 日志与诊断文件 ###
+logs/
+crash-reports/
+hs_err_pid*.log
+replay_pid*.log
+*.hprof
+
+### 本地配置与敏感信息 ###
+.env
+.env.*
+!.env.example
+local.properties
+gradle-local.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+### Jupyter ###
+.ipynb_checkpoints/
+
+### 操作系统与临时文件 ###
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+*.orig
+*.rej

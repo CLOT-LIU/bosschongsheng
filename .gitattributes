@@ -1,0 +1,4 @@
+# 禁用生成文件的自动换行转换，因为生成文件始终使用 LF 换行符。
+# 如需避免 Git 因仅换行符变化而报告文件被修改，可在此添加其他文件或路径。
+src/generated/**/.cache/* text eol=lf
+src/generated/**/*.json text eol=lf

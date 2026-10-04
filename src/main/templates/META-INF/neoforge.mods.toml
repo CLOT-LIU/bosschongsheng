@@ -1,0 +1,29 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+
+#issueTrackerURL="https://github.com/CLOTLIU/bosschongsheng/issues"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+# 直接写死中文名：gradle.properties 经 ISO-8859-1 解码会导致中文乱码
+displayName="Boss重生"
+authors="CLOTLIU"
+description='''
+在指定结构内右键使用设定物品召唤 Boss。基于香草纪元整合包中的 bosschongsheng（原作者 qingye）移植到 NeoForge 1.21.1。
+'''
+
+[[dependencies.${mod_id}]]
+    modId="neoforge"
+    type="required"
+    versionRange="[${neo_version},)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    type="required"
+    versionRange="${minecraft_version_range}"
+    ordering="NONE"
+    side="BOTH"
