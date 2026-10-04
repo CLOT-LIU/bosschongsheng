@@ -2,7 +2,7 @@ modLoader="javafml"
 loaderVersion="${loader_version_range}"
 license="${mod_license}"
 
-#issueTrackerURL="https://github.com/CLOTLIU/bosschongsheng/issues"
+issueTrackerURL="https://github.com/CLOT-LIU/bosschongsheng/issues"
 
 [[mods]]
 modId="${mod_id}"
