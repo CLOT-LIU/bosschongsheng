@@ -19,6 +19,7 @@ public class BossChongsheng {
 
     public BossChongsheng(IEventBus modEventBus, ModContainer modContainer) {
         modEventBus.addListener(Networking::onRegisterPayloads);
+        BossRespawnEvents.ATTACHMENTS.register(modEventBus);
         LOGGER.info("bosschongsheng (Boss重生) loaded");
     }
 }

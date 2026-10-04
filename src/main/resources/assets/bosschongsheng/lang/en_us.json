@@ -22,5 +22,9 @@
   "gui.bosschongsheng.config.sort_prefix": "Sort: ",
   "gui.bosschongsheng.config.sort_name": "Name",
   "gui.bosschongsheng.config.sort_dimension": "Dimension",
-  "gui.bosschongsheng.config.sort_source": "Source"
+  "gui.bosschongsheng.config.sort_source": "Source",
+  "gui.bosschongsheng.config.protection_on": "Spawn Protection: ON",
+  "gui.bosschongsheng.config.protection_off": "Spawn Protection: OFF",
+  "gui.bosschongsheng.config.protection_seconds": "Invuln. time",
+  "gui.bosschongsheng.config.seconds_unit": "s"
 }

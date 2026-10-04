@@ -9,6 +9,8 @@ import java.util.List;
 public final class BossRespawnConfigClient {
     private static final List<String> STRUCTURE_IDS = new ArrayList<>();
     private static final List<RuleEntry> RULE_LIST = new ArrayList<>();
+    private static boolean spawnProtectionEnabled = true;
+    private static int spawnProtectionSeconds = 5;
     private static String lastError;
 
     private BossRespawnConfigClient() {
@@ -34,6 +36,19 @@ public final class BossRespawnConfigClient {
 
     public static List<RuleEntry> getRuleList() {
         return new ArrayList<>(RULE_LIST);
+    }
+
+    public static void setSettings(boolean enabled, int seconds) {
+        spawnProtectionEnabled = enabled;
+        spawnProtectionSeconds = seconds;
+    }
+
+    public static boolean isSpawnProtectionEnabled() {
+        return spawnProtectionEnabled;
+    }
+
+    public static int getSpawnProtectionSeconds() {
+        return spawnProtectionSeconds;
     }
 
     public static void setLastError(String err) {

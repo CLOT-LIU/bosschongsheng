@@ -28,12 +28,14 @@ public record ReloadBossRulesPayload() implements CustomPacketPayload {
             if (!(context.player() instanceof ServerPlayer player) || !player.hasPermissions(2)) {
                 return;
             }
-            BossRespawnConfig.getInstance().reloadConfig();
-            List<BossRespawnConfigClient.RuleEntry> rules = BossRespawnConfig.getInstance().getRules().stream()
+            BossRespawnConfig cfg = BossRespawnConfig.getInstance();
+            cfg.reloadConfig();
+            List<BossRespawnConfigClient.RuleEntry> rules = cfg.getRules().stream()
                     .map(r -> new BossRespawnConfigClient.RuleEntry(
                             r.structureId(), r.triggerItemId(), r.entityTypeId()))
                     .toList();
-            PacketDistributor.sendToPlayer(player, new BossRespawnListPayload(rules, true));
+            PacketDistributor.sendToPlayer(player, new BossRespawnListPayload(rules, true,
+                    cfg.isSpawnProtectionEnabled(), cfg.getSpawnProtectionSeconds()));
         });
     }
 

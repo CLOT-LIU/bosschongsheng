@@ -29,6 +29,11 @@ public final class BossRespawnConfig {
 
     private final Map<String, BossRespawnRule> rules = new HashMap<>();
 
+    /** 召唤生物是否开启出生保护（短暂无敌且不能攻击玩家） */
+    private boolean spawnProtectionEnabled = true;
+    /** 出生保护时长（秒），仅在开启时生效 */
+    private int spawnProtectionSeconds = 5;
+
     public static BossRespawnConfig getInstance() {
         if (instance == null) {
             instance = new BossRespawnConfig();
@@ -65,10 +70,29 @@ public final class BossRespawnConfig {
         return rules.get(structureId);
     }
 
+    public boolean isSpawnProtectionEnabled() {
+        return spawnProtectionEnabled;
+    }
+
+    public int getSpawnProtectionSeconds() {
+        return spawnProtectionSeconds;
+    }
+
+    /**
+     * 更新全局设置；seconds 会被收敛到 1～600 秒。
+     * 调用方负责后续 {@link #saveToFile()} 持久化。
+     */
+    public void updateSettings(boolean enabled, int seconds) {
+        this.spawnProtectionEnabled = enabled;
+        this.spawnProtectionSeconds = Math.max(1, Math.min(600, seconds));
+    }
+
     public boolean saveToFile() {
         Path path = getConfigPath();
         try {
             JsonObject root = new JsonObject();
+            root.add("spawnProtection", new JsonPrimitive(spawnProtectionEnabled));
+            root.add("spawnProtectionSeconds", new JsonPrimitive(spawnProtectionSeconds));
             JsonArray arr = new JsonArray();
             for (BossRespawnRule r : rules.values()) {
                 JsonObject o = new JsonObject();
@@ -100,6 +124,13 @@ public final class BossRespawnConfig {
         try {
             String jsonContent = Files.readString(path);
             JsonObject root = JsonParser.parseString(jsonContent).getAsJsonObject();
+            if (root.has("spawnProtection")) {
+                spawnProtectionEnabled = root.get("spawnProtection").getAsBoolean();
+            }
+            if (root.has("spawnProtectionSeconds")) {
+                spawnProtectionSeconds = Math.max(1, Math.min(600,
+                        root.get("spawnProtectionSeconds").getAsInt()));
+            }
             if (root.has("rules")) {
                 JsonArray arr = root.getAsJsonArray("rules");
                 for (JsonElement el : arr) {

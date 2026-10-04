@@ -48,7 +48,9 @@ public record RequestConfigPayload() implements CustomPacketPayload {
                     .map(r -> new BossRespawnConfigClient.RuleEntry(
                             r.structureId(), r.triggerItemId(), r.entityTypeId()))
                     .toList();
-            PacketDistributor.sendToPlayer(player, new BossRespawnListPayload(rules));
+            BossRespawnConfig cfg = BossRespawnConfig.getInstance();
+            PacketDistributor.sendToPlayer(player, new BossRespawnListPayload(
+                    rules, cfg.isSpawnProtectionEnabled(), cfg.getSpawnProtectionSeconds()));
         });
     }
 

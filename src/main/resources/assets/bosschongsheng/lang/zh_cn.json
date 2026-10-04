@@ -22,5 +22,9 @@
   "gui.bosschongsheng.config.sort_prefix": "排序：",
   "gui.bosschongsheng.config.sort_name": "名称",
   "gui.bosschongsheng.config.sort_dimension": "维度",
-  "gui.bosschongsheng.config.sort_source": "来源"
+  "gui.bosschongsheng.config.sort_source": "来源",
+  "gui.bosschongsheng.config.protection_on": "出生保护：开",
+  "gui.bosschongsheng.config.protection_off": "出生保护：关",
+  "gui.bosschongsheng.config.protection_seconds": "无敌时长",
+  "gui.bosschongsheng.config.seconds_unit": "秒"
 }

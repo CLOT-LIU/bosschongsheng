@@ -5,6 +5,7 @@ import com.bosschongsheng.network.ReloadBossRulesPayload;
 import com.bosschongsheng.network.RemoveBossRulePayload;
 import com.bosschongsheng.network.RequestConfigPayload;
 import com.bosschongsheng.network.SaveBossRulesPayload;
+import com.bosschongsheng.network.UpdateSettingsPayload;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -16,6 +17,7 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.neoforged.neoforge.network.PacketDistributor;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,7 +29,7 @@ import java.util.Locale;
 public class BossRespawnConfigScreen extends Screen {
     private static final int ROW_H = 24;
     private static final int MAX_PANEL_W = 600;
-    private static final int LIST_TOP_OFFSET = 60;
+    private static final int LIST_TOP_OFFSET = 86;
     private static final int ROW_BTN_W = 36;
     private static final int ROW_BTN_H = 18;
 
@@ -45,6 +47,13 @@ public class BossRespawnConfigScreen extends Screen {
     private int visibleRows;
     private int listAreaH;
     private EditBox searchBox;
+    private Button protectionToggle;
+    private EditBox secondsBox;
+    private int secondsLabelX;
+    private int secondsUnitX;
+    private int settingsRowY;
+    private boolean protectionEnabled;
+    private int protectionSeconds;
     private List<RuleEntry> filteredList = new ArrayList<>();
     private int scrollOffset;
     private String pendingDeleteId;
@@ -112,6 +121,25 @@ public class BossRespawnConfigScreen extends Screen {
         searchBox.setMaxLength(64);
         addRenderableWidget(searchBox);
 
+        // 出生保护设置行：开关按钮 + 无敌时长输入
+        protectionEnabled = BossRespawnConfigClient.isSpawnProtectionEnabled();
+        protectionSeconds = BossRespawnConfigClient.getSpawnProtectionSeconds();
+        int settingsY = topPos + 54;
+        settingsRowY = settingsY;
+        protectionToggle = Button.builder(protectionLabel(), b -> toggleProtection())
+                .bounds(leftPos + 10, settingsY, 110, 20).build();
+        addRenderableWidget(protectionToggle);
+
+        secondsLabelX = leftPos + 10 + 110 + 8;
+        int secondsX = secondsLabelX + this.font.width(protectionSecondsLabel()) + 4;
+        secondsBox = new EditBox(this.font, secondsX, settingsY, 38, 20, Component.empty());
+        secondsBox.setMaxLength(3);
+        secondsBox.setFilter(s -> s.isEmpty() || s.matches("\\d{1,3}"));
+        secondsBox.setValue(String.valueOf(protectionSeconds));
+        secondsBox.setEditable(protectionEnabled);
+        addRenderableWidget(secondsBox);
+        secondsUnitX = secondsX + 38 + 4;
+
         int btnY = topPos + panelH - 27;
         int bw = 52;
         addRenderableWidget(Button.builder(
@@ -144,6 +172,61 @@ public class BossRespawnConfigScreen extends Screen {
     public void onRuleAddedOrEdited() {
         PacketDistributor.sendToServer(new RequestConfigPayload());
         refreshFilter();
+    }
+
+    private Component protectionLabel() {
+        return Component.translatable(protectionEnabled
+                ? "gui.bosschongsheng.config.protection_on"
+                : "gui.bosschongsheng.config.protection_off");
+    }
+
+    private String protectionSecondsLabel() {
+        return Component.translatable("gui.bosschongsheng.config.protection_seconds").getString();
+    }
+
+    private void toggleProtection() {
+        protectionEnabled = !protectionEnabled;
+        protectionToggle.setMessage(protectionLabel());
+        secondsBox.setEditable(protectionEnabled);
+        if (protectionEnabled) {
+            commitSeconds(false);
+        }
+        sendSettings();
+    }
+
+    /** 读取时长输入并收敛到 1～600；resetBox 为 true 时把收敛结果写回输入框 */
+    private void commitSeconds(boolean resetBox) {
+        int seconds;
+        try {
+            seconds = Integer.parseInt(secondsBox.getValue().trim());
+        } catch (NumberFormatException e) {
+            seconds = 5;
+        }
+        seconds = Math.max(1, Math.min(600, seconds));
+        protectionSeconds = seconds;
+        if (resetBox) {
+            secondsBox.setValue(String.valueOf(seconds));
+            secondsBox.setFocused(false);
+        }
+    }
+
+    private void sendSettings() {
+        commitSeconds(false);
+        BossRespawnConfigClient.setSettings(protectionEnabled, protectionSeconds);
+        PacketDistributor.sendToServer(
+                new UpdateSettingsPayload(protectionEnabled, protectionSeconds));
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // 时长输入框内按回车（含小键盘回车）即提交
+        if (secondsBox != null && secondsBox.isFocused()
+                && (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER)) {
+            commitSeconds(true);
+            sendSettings();
+            return true;
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
     @Override
@@ -219,6 +302,13 @@ public class BossRespawnConfigScreen extends Screen {
                 x + panelW - 10, y + LIST_TOP_OFFSET + listAreaH + 2, LIST_BG);
 
         super.render(graphics, mouseX, mouseY, partialTick);
+
+        int labelColor = protectionEnabled ? 0xE0E0E0 : 0xFF6B6B6B;
+        graphics.drawString(this.font, protectionSecondsLabel(),
+                secondsLabelX, settingsRowY + 6, labelColor, false);
+        graphics.drawString(this.font,
+                Component.translatable("gui.bosschongsheng.config.seconds_unit").getString(),
+                secondsUnitX, settingsRowY + 6, labelColor, false);
 
         int listTop = y + LIST_TOP_OFFSET;
         int colStruct = x + 10 + 4;

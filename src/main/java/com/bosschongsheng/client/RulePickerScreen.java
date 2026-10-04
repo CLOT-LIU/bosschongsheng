@@ -6,15 +6,19 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.network.PacketDistributor;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -48,6 +52,9 @@ public class RulePickerScreen extends Screen {
     private static final int SCROLL_TRACK = 0xFF3A3A46;
     private static final int SCROLL_THUMB = 0xFF8A8AA0;
     private static final int SCROLL_THUMB_ACTIVE = 0xFFB8B8D0;
+    private static final int HEADER_BG = 0xFF242430;
+    private static final int HEADER_LINE = 0xFF4C5470;
+    private static final int HEADER_COLOR = 0xFF9ECBFF;
 
     // 排序方式：0=名称，1=维度（主世界→下界→末地），2=来源模组
     private static final int SORT_NAME = 0;
@@ -70,6 +77,17 @@ public class RulePickerScreen extends Screen {
     private List<String> filteredStructures = new ArrayList<>();
     private List<ItemEntry> filteredItems = new ArrayList<>();
     private List<String> filteredEntities = new ArrayList<>();
+
+    /** 三栏实际渲染的行：条目（String/ItemEntry）或 {@link HeaderRow} 分组标题 */
+    private final List<List<Object>> viewRows = List.of(
+            new ArrayList<Object>(), new ArrayList<Object>(), new ArrayList<Object>());
+    /** 首次构建视图时把已选中的项滚动到可见位置（编辑模式用），消费一次后失效 */
+    private final boolean[] revealSelected = {true, true, true};
+
+    /** 悬停提示请求（行绘制时收集，所有内容画完后统一弹出，避免被后续行覆盖） */
+    private List<net.minecraft.util.FormattedCharSequence> pendingTooltip;
+    private int pendingTooltipX;
+    private int pendingTooltipY;
 
     private String selectedStructureId;
     private String selectedItemId;
@@ -258,6 +276,11 @@ public class RulePickerScreen extends Screen {
                 Component.translatable("gui.cancel"),
                 b -> this.minecraft.setScreen(parent))
                 .bounds(panelLeft + 10 + btnW + 10, btnY, btnW, 22).build());
+
+        // 布局参数确定后，把构造时按未初始化布局计算的滚动量收敛到合法范围
+        for (int c = 0; c < 3; c++) {
+            setScroll(c, currentScroll(c));
+        }
     }
 
     private void updateSortButtonLabel(int column) {
@@ -347,56 +370,132 @@ public class RulePickerScreen extends Screen {
     private void refreshStructureFilter() {
         Query q = parseQuery(searchStructure != null ? searchStructure.getValue() : "");
         int sort = sortMode[0];
-        filteredStructures = pinSelectedFirst(
-                structureIds.stream()
-                        .filter(id -> matchesSource(id, q.sources()))
-                        .filter(id -> q.text().isEmpty()
-                                || id.toLowerCase(Locale.ROOT).contains(q.text())
-                                || DisplayNames.structure(id).toLowerCase(Locale.ROOT).contains(q.text()))
-                        .sorted(Comparator
-                                .comparingInt((String id) -> sort == SORT_DIMENSION ? dimensionOfStructure(id) : 0)
-                                .thenComparing(id -> sort == SORT_SOURCE
-                                        ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
-                                .thenComparing(DisplayNames::structure))
-                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new)),
-                id -> id.equals(selectedStructureId));
+        List<String> list = structureIds.stream()
+                .filter(id -> matchesSource(id, q.sources()))
+                .filter(id -> q.text().isEmpty()
+                        || id.toLowerCase(Locale.ROOT).contains(q.text())
+                        || DisplayNames.structure(id).toLowerCase(Locale.ROOT).contains(q.text()))
+                .sorted(Comparator
+                        .comparingInt((String id) -> sort == SORT_DIMENSION ? dimensionOfStructure(id) : 0)
+                        .thenComparing(id -> sort == SORT_SOURCE
+                                ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
+                        .thenComparing(DisplayNames::structure))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        // 来源排序时分组保持完整，选中项在组内置顶（由 rebuildView 处理）；其余排序全局置顶
+        filteredStructures = sort == SORT_SOURCE
+                ? list : pinSelectedFirst(list, id -> id.equals(selectedStructureId));
+        rebuildView(0);
         scrollStructure = Math.min(scrollStructure, scrollMax(0));
     }
 
     private void refreshItemFilter() {
         Query q = parseQuery(searchItem != null ? searchItem.getValue() : "");
         int sort = sortMode[1];
-        filteredItems = pinSelectedFirst(
-                allItems.stream()
-                        .filter(e -> matchesSource(e.id(), q.sources()))
-                        .filter(e -> q.text().isEmpty()
-                                || e.id().toLowerCase(Locale.ROOT).contains(q.text())
-                                || e.stack().getHoverName().getString().toLowerCase(Locale.ROOT).contains(q.text()))
-                        .sorted(Comparator
-                                .comparing((ItemEntry e) -> sort == SORT_SOURCE
-                                        ? namespaceOf(e.id()).toLowerCase(Locale.ROOT) : "")
-                                .thenComparing(e -> e.stack().getHoverName().getString()))
-                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new)),
-                e -> e.id().equals(selectedItemId));
+        List<ItemEntry> list = allItems.stream()
+                .filter(e -> matchesSource(e.id(), q.sources()))
+                .filter(e -> q.text().isEmpty()
+                        || e.id().toLowerCase(Locale.ROOT).contains(q.text())
+                        || e.stack().getHoverName().getString().toLowerCase(Locale.ROOT).contains(q.text()))
+                .sorted(Comparator
+                        .comparing((ItemEntry e) -> sort == SORT_SOURCE
+                                ? namespaceOf(e.id()).toLowerCase(Locale.ROOT) : "")
+                        .thenComparing(e -> e.stack().getHoverName().getString()))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        filteredItems = sort == SORT_SOURCE
+                ? list : pinSelectedFirst(list, e -> e.id().equals(selectedItemId));
+        rebuildView(1);
         scrollItem = Math.min(scrollItem, scrollMax(1));
     }
 
     private void refreshEntityFilter() {
         Query q = parseQuery(searchEntity != null ? searchEntity.getValue() : "");
         int sort = sortMode[2];
-        filteredEntities = pinSelectedFirst(
-                allEntities.stream()
-                        .filter(id -> matchesSource(id, q.sources()))
-                        .filter(id -> q.text().isEmpty()
-                                || id.toLowerCase(Locale.ROOT).contains(q.text())
-                                || entityName(id).toLowerCase(Locale.ROOT).contains(q.text()))
-                        .sorted(Comparator
-                                .comparing((String id) -> sort == SORT_SOURCE
-                                        ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
-                                .thenComparing(RulePickerScreen::entityName))
-                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new)),
-                id -> id.equals(selectedEntityId));
+        List<String> list = allEntities.stream()
+                .filter(id -> matchesSource(id, q.sources()))
+                .filter(id -> q.text().isEmpty()
+                        || id.toLowerCase(Locale.ROOT).contains(q.text())
+                        || entityName(id).toLowerCase(Locale.ROOT).contains(q.text()))
+                .sorted(Comparator
+                        .comparing((String id) -> sort == SORT_SOURCE
+                                ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
+                        .thenComparing(RulePickerScreen::entityName))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        filteredEntities = sort == SORT_SOURCE
+                ? list : pinSelectedFirst(list, id -> id.equals(selectedEntityId));
+        rebuildView(2);
         scrollEntity = Math.min(scrollEntity, scrollMax(2));
+    }
+
+    // ---------------- 来源分组视图 ----------------
+
+    /** 视图行对象的 id 解析：结构/生物为 String，物品为 {@link ItemEntry} */
+    private String entryId(int column, Object row) {
+        return column == 1 ? ((ItemEntry) row).id() : (String) row;
+    }
+
+    private String selectedIdOf(int column) {
+        return switch (column) {
+            case 0 -> selectedStructureId;
+            case 1 -> selectedItemId;
+            default -> selectedEntityId;
+        };
+    }
+
+    /**
+     * 按当前排序构建实际渲染的视图行：来源排序时按模组分组并插入 {@link HeaderRow}，
+     * 组按模组显示名排序，已选中的项固定在组内第一项；其余排序为平铺列表。
+     */
+    private void rebuildView(int column) {
+        List<Object> view = viewRows.get(column);
+        view.clear();
+        List<?> entries = switch (column) {
+            case 0 -> filteredStructures;
+            case 1 -> filteredItems;
+            default -> filteredEntities;
+        };
+
+        if (sortMode[column] != SORT_SOURCE) {
+            view.addAll(entries);
+            return;
+        }
+
+        // entries 已按 namespace + 名称排序，用 LinkedHashMap 分组保持组内顺序
+        Map<String, List<Object>> groups = new java.util.LinkedHashMap<>();
+        for (Object e : entries) {
+            groups.computeIfAbsent(namespaceOf(entryId(column, e)), k -> new ArrayList<>()).add(e);
+        }
+        List<String> namespaces = new ArrayList<>(groups.keySet());
+        namespaces.sort(Comparator
+                .comparing((String ns) -> modDisplayName(ns).toLowerCase(Locale.ROOT))
+                .thenComparing(ns -> ns.toLowerCase(Locale.ROOT)));
+
+        String selected = selectedIdOf(column);
+        for (String ns : namespaces) {
+            List<Object> group = groups.get(ns);
+            // 选中项在组内置顶
+            if (selected != null && !selected.isEmpty()) {
+                for (int i = 0; i < group.size(); i++) {
+                    if (entryId(column, group.get(i)).equals(selected) && i > 0) {
+                        group.add(0, group.remove(i));
+                        break;
+                    }
+                }
+            }
+            view.add(new HeaderRow(ns, modDisplayName(ns), group.size()));
+            view.addAll(group);
+        }
+
+        // 首次构建（打开编辑界面）时滚动到已选中项所在分组
+        if (revealSelected[column] && selected != null && !selected.isEmpty()) {
+            revealSelected[column] = false;
+            for (int i = 0; i < view.size(); i++) {
+                Object row = view.get(i);
+                if (!(row instanceof HeaderRow) && entryId(column, row).equals(selected)) {
+                    setScroll(column, Math.max(0, i - 1));
+                    break;
+                }
+            }
+        }
     }
 
     private void confirm() {
@@ -414,11 +513,7 @@ public class RulePickerScreen extends Screen {
     // ---------------- 滚动条与点击 ----------------
 
     private int totalCount(int column) {
-        return switch (column) {
-            case 0 -> filteredStructures.size();
-            case 1 -> filteredItems.size();
-            default -> filteredEntities.size();
-        };
+        return viewRows.get(column).size();
     }
 
     private int currentScroll(int column) {
@@ -505,23 +600,23 @@ public class RulePickerScreen extends Screen {
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
-    /** @return 该行是否存在且已选中 */
+    /** @return 该行是否为可选择的条目且已选中（分组标题行不可选） */
     private boolean selectRow(int column, int row) {
+        List<Object> view = viewRows.get(column);
+        if (row < 0 || row >= view.size()) {
+            return false;
+        }
+        Object obj = view.get(row);
+        if (obj instanceof HeaderRow) {
+            return false;
+        }
+        String id = entryId(column, obj);
         if (column == 0) {
-            if (row < 0 || row >= filteredStructures.size()) {
-                return false;
-            }
-            selectedStructureId = filteredStructures.get(row);
+            selectedStructureId = id;
         } else if (column == 1) {
-            if (row < 0 || row >= filteredItems.size()) {
-                return false;
-            }
-            selectedItemId = filteredItems.get(row).id();
+            selectedItemId = id;
         } else {
-            if (row < 0 || row >= filteredEntities.size()) {
-                return false;
-            }
-            selectedEntityId = filteredEntities.get(row);
+            selectedEntityId = id;
         }
         return true;
     }
@@ -566,6 +661,7 @@ public class RulePickerScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         renderBackground(graphics, mouseX, mouseY, partialTick);
+        pendingTooltip = null;
 
         graphics.fill(panelLeft, panelTop, panelLeft + panelW, panelTop + panelH, PANEL_BG);
         graphics.fill(panelLeft, panelTop, panelLeft + panelW, panelTop + 1, PANEL_BORDER);
@@ -601,6 +697,11 @@ public class RulePickerScreen extends Screen {
         for (int c = 0; c < 3; c++) {
             drawScrollBar(graphics, c, mouseX, mouseY);
         }
+
+        // 悬停提示最后弹出，覆盖在所有行与滚动条之上
+        if (pendingTooltip != null) {
+            graphics.renderTooltip(this.font, pendingTooltip, pendingTooltipX, pendingTooltipY);
+        }
     }
 
     private void drawCount(GuiGraphics graphics, int column, int matched, int total) {
@@ -635,64 +736,230 @@ public class RulePickerScreen extends Screen {
         graphics.fill(x, y, x + SCROLL_BAR_W, y + thumbH, active ? SCROLL_THUMB_ACTIVE : SCROLL_THUMB);
     }
 
+    /** 来源分组标题行：命名空间、模组显示名、组内条目数 */
+    private record HeaderRow(String namespace, String title, int count) {
+    }
+
+    /** 超长文本截断并加省略号；maxW 异常小（窄栏）时至少保留 1px */
+    private String ellipsize(String text, int maxW) {
+        if (this.font.width(text) <= maxW) {
+            return text;
+        }
+        int dots = this.font.width("..");
+        return this.font.plainSubstrByWidth(text, Math.max(1, maxW - dots)) + "..";
+    }
+
+    /** 鼠标悬停在指定行内时，登记一个完整文本提示（渲染末尾统一弹出） */
+    private void queueLineTooltip(int left, int rowY, int width,
+                                  Component text, int mouseX, int mouseY) {
+        if (pendingTooltip == null
+                && mouseX >= left && mouseX < left + width
+                && mouseY >= rowY && mouseY < rowY + ROW_H) {
+            pendingTooltip = java.util.List.of(text.getVisualOrderText());
+            pendingTooltipX = mouseX;
+            pendingTooltipY = mouseY;
+        }
+    }
+
+    /** 来源分组标题行：模组显示名 + 右侧数量；悬停显示完整模组名与命名空间 */
+    private void drawHeaderRow(GuiGraphics graphics, int column, int rowY, HeaderRow header,
+                               int mouseX, int mouseY) {
+        int left = colX[column];
+        int width = colW - (scrollBarActive(column) ? SCROLL_BAR_W + 2 : 0);
+        graphics.fill(left, rowY, left + width, rowY + ROW_H, HEADER_BG);
+        graphics.fill(left, rowY + ROW_H - 1, left + width, rowY + ROW_H, HEADER_LINE);
+
+        String count = String.valueOf(header.count());
+        int countW = this.font.width(count);
+        graphics.drawString(this.font, count, left + width - 4 - countW, rowY + 5, COUNT_COLOR, false);
+
+        int titleMaxW = width - countW - 12;
+        String shown = ellipsize(header.title(), titleMaxW);
+        graphics.drawString(this.font, shown, left + 3, rowY + 5, HEADER_COLOR, false);
+
+        // 悬停提示：第一行完整模组名，第二行灰色命名空间
+        if (pendingTooltip == null
+                && mouseX >= left && mouseX < left + width
+                && mouseY >= rowY && mouseY < rowY + ROW_H) {
+            pendingTooltip = java.util.List.of(
+                    Component.literal(header.title()).getVisualOrderText(),
+                    Component.literal(header.namespace())
+                            .withStyle(net.minecraft.ChatFormatting.GRAY).getVisualOrderText());
+            pendingTooltipX = mouseX;
+            pendingTooltipY = mouseY;
+        }
+    }
+
     private void drawStructureRows(GuiGraphics graphics, int mouseX, int mouseY) {
         int left = colX[0];
         int top = listY[0];
+        List<Object> view = viewRows.get(0);
         for (int i = 0; i < visibleRows; i++) {
             int idx = scrollStructure + i;
-            if (idx >= filteredStructures.size()) {
+            if (idx >= view.size()) {
                 break;
             }
-            String id = filteredStructures.get(idx);
+            Object row = view.get(idx);
             int rowY = top + i * ROW_H;
-            drawRowBackground(graphics, 0, rowY, id.equals(selectedStructureId), mouseX, mouseY);
-            String name = DisplayNames.structure(id);
-            int maxW = colW - (scrollBarActive(0) ? SCROLL_BAR_W + 8 : 10);
-            if (this.font.width(name) > maxW) {
-                name = this.font.plainSubstrByWidth(name, maxW - 4) + "..";
+            if (row instanceof HeaderRow header) {
+                drawHeaderRow(graphics, 0, rowY, header, mouseX, mouseY);
+                continue;
             }
+            String id = (String) row;
+            drawRowBackground(graphics, 0, rowY, id.equals(selectedStructureId), mouseX, mouseY);
+            String fullName = DisplayNames.structure(id);
+            int maxW = colW - (scrollBarActive(0) ? SCROLL_BAR_W + 8 : 10);
+            String name = ellipsize(fullName, maxW);
             graphics.drawString(this.font, name, left + 4, rowY + 5, TEXT_COLOR, false);
+            if (!name.equals(fullName)) {
+                queueLineTooltip(left, rowY, maxW,
+                        Component.literal(fullName), mouseX, mouseY);
+            }
         }
     }
 
     private void drawItemRows(GuiGraphics graphics, int mouseX, int mouseY) {
         int left = colX[1];
         int top = listY[1];
+        List<Object> view = viewRows.get(1);
         for (int i = 0; i < visibleRows; i++) {
             int idx = scrollItem + i;
-            if (idx >= filteredItems.size()) {
+            if (idx >= view.size()) {
                 break;
             }
-            ItemEntry e = filteredItems.get(idx);
+            Object row = view.get(idx);
             int rowY = top + i * ROW_H;
+            if (row instanceof HeaderRow header) {
+                drawHeaderRow(graphics, 1, rowY, header, mouseX, mouseY);
+                continue;
+            }
+            ItemEntry e = (ItemEntry) row;
             drawRowBackground(graphics, 1, rowY, e.id().equals(selectedItemId), mouseX, mouseY);
             graphics.renderItem(e.stack(), left + 2, rowY + 1);
-            String name = e.stack().getHoverName().getString();
+            String fullName = e.stack().getHoverName().getString();
             int maxW = colW - (scrollBarActive(1) ? SCROLL_BAR_W + 26 : 28);
-            if (this.font.width(name) > maxW) {
-                name = this.font.plainSubstrByWidth(name, maxW - 4) + "..";
-            }
+            String name = ellipsize(fullName, maxW);
             graphics.drawString(this.font, name, left + 20, rowY + 5, TEXT_COLOR, false);
+            if (!name.equals(fullName)) {
+                queueLineTooltip(left, rowY, colW,
+                        Component.literal(fullName), mouseX, mouseY);
+            }
         }
+    }
+
+    /** 生物 id → 实体实例缓存（用于 GUI 内 3D 渲染）；非 LivingEntity（船、盔甲架等）缓存 null */
+    private static final Map<String, LivingEntity> ENTITY_RENDER_CACHE = new HashMap<>();
+
+    private static LivingEntity entityForRender(String id) {
+        if (ENTITY_RENDER_CACHE.containsKey(id)) {
+            return ENTITY_RENDER_CACHE.get(id);
+        }
+        ResourceLocation key = ResourceLocation.tryParse(id);
+        EntityType<?> type = key == null ? null : BuiltInRegistries.ENTITY_TYPE.get(key);
+        LivingEntity entity = null;
+        if (type != null) {
+            try {
+                var created = type.create(net.minecraft.client.Minecraft.getInstance().level);
+                if (created instanceof LivingEntity living) {
+                    entity = living;
+                }
+            } catch (Throwable ignored) {
+                // 某些实体在无世界环境创建会抛异常，退回 null
+            }
+        }
+        ENTITY_RENDER_CACHE.put(id, entity);
+        return entity;
+    }
+
+    /** 图标姿态：水平转向角（看到侧面）与俯视角（看到顶面），固定不随鼠标变化 */
+    private static final float ICON_YAW_DEG = 40f;
+    private static final float ICON_PITCH_DEG = 20f;
+
+    /**
+     * 在矩形框内渲染固定 45° 三视角的生物模型（正面+侧面+顶面）。
+     * 参照原版 InventoryScreen#renderEntityInInventoryFollowsAngle 反编译实现，
+     * 区别：身体与头部保持一致朝向，不做"眼睛跟随鼠标"的两倍头部偏转。
+     */
+    private static void renderEntityIcon(GuiGraphics graphics, int x1, int y1, int x2, int y2,
+                                         LivingEntity entity, float renderScale) {
+        float cx = (x1 + x2) / 2.0f;
+        float cy = (y1 + y2) / 2.0f;
+        graphics.enableScissor(x1, y1, x2, y2);
+
+        Quaternionf pose = new Quaternionf().rotateZ((float) Math.PI);
+        // 负 X 旋转 = 相机在模型斜上方（正值会看到脚底）
+        Quaternionf camera = new Quaternionf().rotateX((float) Math.toRadians(-ICON_PITCH_DEG));
+        pose.mul(camera);
+
+        float oldBodyYaw = entity.yBodyRot;
+        float oldYaw = entity.getYRot();
+        float oldPitch = entity.getXRot();
+        float oldHeadYawO = entity.yHeadRotO;
+        float oldHeadYaw = entity.yHeadRot;
+        entity.yBodyRot = 180.0f + ICON_YAW_DEG;
+        entity.setYRot(180.0f + ICON_YAW_DEG);
+        entity.setXRot(ICON_PITCH_DEG * 0.6f); // 头部略低，面向斜上方的相机
+        entity.yHeadRot = entity.getYRot();
+        entity.yHeadRotO = entity.getYRot();
+
+        float scale = entity.getScale();
+        Vector3f translate = new Vector3f(0.0f, entity.getBbHeight() / 2.0f + 0.0625f * scale, 0.0f);
+        InventoryScreen.renderEntityInInventory(
+                graphics, cx, cy, renderScale, translate, pose, camera, entity);
+
+        entity.yBodyRot = oldBodyYaw;
+        entity.setYRot(oldYaw);
+        entity.setXRot(oldPitch);
+        entity.yHeadRotO = oldHeadYawO;
+        entity.yHeadRot = oldHeadYaw;
+        graphics.disableScissor();
     }
 
     private void drawEntityRows(GuiGraphics graphics, int mouseX, int mouseY) {
         int left = colX[2];
         int top = listY[2];
+        List<Object> view = viewRows.get(2);
         for (int i = 0; i < visibleRows; i++) {
             int idx = scrollEntity + i;
-            if (idx >= filteredEntities.size()) {
+            if (idx >= view.size()) {
                 break;
             }
-            String id = filteredEntities.get(idx);
+            Object rowObj = view.get(idx);
             int rowY = top + i * ROW_H;
-            drawRowBackground(graphics, 2, rowY, id.equals(selectedEntityId), mouseX, mouseY);
-            String name = entityName(id);
-            int maxW = colW - (scrollBarActive(2) ? SCROLL_BAR_W + 8 : 10);
-            if (this.font.width(name) > maxW) {
-                name = this.font.plainSubstrByWidth(name, maxW - 4) + "..";
+            if (rowObj instanceof HeaderRow header) {
+                drawHeaderRow(graphics, 2, rowY, header, mouseX, mouseY);
+                continue;
             }
-            graphics.drawString(this.font, name, left + 4, rowY + 5, TEXT_COLOR, false);
+            String id = (String) rowObj;
+            drawRowBackground(graphics, 2, rowY, id.equals(selectedEntityId), mouseX, mouseY);
+            LivingEntity entity = entityForRender(id);
+            if (entity != null) {
+                int box = ROW_H - 2;
+                int boxX1 = left + 1;
+                int boxY1 = rowY + 1;
+                int boxX2 = left + 1 + box;
+                int boxY2 = rowY + 1 + box;
+                // 按最长边 fit：45° 转向后水平投影为 w*√2，俯视后垂直投影含 h·cos + w·sin；
+                // 再留 5% 余量给翅膀、长角等超出包围盒的部件，保证整体落在框内
+                float entityScale = entity.getScale();
+                float baseH = entity.getBbHeight() / entityScale;
+                float baseW = Math.max(entity.getBbWidth() / entityScale, 0.5f);
+                double rad = Math.toRadians(ICON_PITCH_DEG);
+                float effW = baseW * 1.4142f;
+                float effH = (float) (baseH * Math.cos(rad) + baseW * Math.sin(rad));
+                float fitted = (box - 2) / Math.max(effW, effH) * 0.95f;
+                renderEntityIcon(graphics, boxX1, boxY1, boxX2, boxY2, entity, fitted);
+            }
+            String fullName = entityName(id);
+            int textX = left + (entity != null ? ROW_H + 2 : 4);
+            int maxW = colW - (scrollBarActive(2) ? SCROLL_BAR_W + 8 : 10)
+                    - (entity != null ? ROW_H + 6 : 4);
+            String name = ellipsize(fullName, maxW);
+            graphics.drawString(this.font, name, textX, rowY + 5, TEXT_COLOR, false);
+            if (!name.equals(fullName)) {
+                queueLineTooltip(left, rowY, colW,
+                        Component.literal(fullName), mouseX, mouseY);
+            }
         }
     }
 

@@ -31,6 +31,8 @@ public final class Networking {
                 RemoveBossRulePayload::handle);
         registrar.playToServer(SaveBossRulesPayload.TYPE, SaveBossRulesPayload.STREAM_CODEC,
                 SaveBossRulesPayload::handle);
+        registrar.playToServer(UpdateSettingsPayload.TYPE, UpdateSettingsPayload.STREAM_CODEC,
+                UpdateSettingsPayload::handle);
         registrar.playToServer(ReloadBossRulesPayload.TYPE, ReloadBossRulesPayload.STREAM_CODEC,
                 ReloadBossRulesPayload::handle);
     }
