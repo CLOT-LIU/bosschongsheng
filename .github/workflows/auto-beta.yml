@@ -46,15 +46,16 @@ jobs:
           if [ "${{ steps.version.outputs.last_tag }}" = "v0.0.0" ]; then
             git log --format=%s > commits.txt
           else
-            git log "${{ steps.version.outputs.last_tag }}"..HEAD --format=%s > commits.txt
+            # 更新说明取上一个正式版（非 -beta）标签之后的提交，避免与上个 beta 重复
+            LAST_STABLE=$(git tag --sort=-creatordate | grep -v -- '-beta' | head -n 1 || true)
+            if [ -z "$LAST_STABLE" ]; then
+              git log --format=%s > commits.txt
+            else
+              git log "$LAST_STABLE"..HEAD --format=%s > commits.txt
+            fi
           fi
           COUNT=$(wc -l < commits.txt | tr -d ' ')
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
-
-      - name: 有新提交才继续
-        if: steps.commits.outputs.count == 0
-        run: |
-          echo "自上个标签以来没有新提交，跳过构建与发布。"
 
       - name: 生成更新说明
         id: notes
