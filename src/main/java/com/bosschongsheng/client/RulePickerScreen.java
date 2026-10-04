@@ -10,31 +10,31 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.MobCategory;
-import net.minecraft.world.item.CreativeModeTab;
-import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
 
 /**
  * 添加/编辑规则界面：结构 / 触发物品 / 召唤实体 三栏选择。
  *
- * <p>每栏支持「分类下拉 + 关键字搜索」叠加过滤；布局随窗口尺寸自适应。</p>
+ * <p>每栏支持排序切换（名称 / 维度 / 来源模组）与关键字搜索，
+ * 搜索框中可用 {@code @模组名}（模组 id 或显示名）按来源过滤；
+ * 列表带可拖拽滚动条；布局随窗口尺寸自适应。</p>
  */
 public class RulePickerScreen extends Screen {
     private static final int ROW_H = 18;
-    private static final int CAT_H = 15;
-    private static final int POPUP_ITEM_H = 15;
-    private static final int POPUP_MAX_VISIBLE = 8;
+    private static final int SORT_H = 15;
+    private static final int SCROLL_BAR_W = 4;
+    private static final int SCROLL_THUMB_MIN = 16;
 
     private static final int PANEL_BG = 0xFF2A2A35;
     private static final int PANEL_BORDER = 0xFF3D3D52;
@@ -45,21 +45,15 @@ public class RulePickerScreen extends Screen {
     private static final int LABEL_COLOR = 0xFFFFFFFF;
     private static final int TEXT_COLOR = 0xFFE0E0E0;
     private static final int COUNT_COLOR = 0xFF9AA0B4;
+    private static final int SCROLL_TRACK = 0xFF3A3A46;
+    private static final int SCROLL_THUMB = 0xFF8A8AA0;
+    private static final int SCROLL_THUMB_ACTIVE = 0xFFB8B8D0;
 
-    // ---- 结构固定分组（顺序即优先级，other 为兜底）----
-    private static final String[] STRUCTURE_GROUPS = {"village", "outpost", "nether", "end", "ocean", "dungeon"};
-    private static final String[][] STRUCTURE_KEYWORDS = {
-            {"village"},
-            {"outpost", "camp", "pillager"},
-            {"nether"},
-            {}, // end 走边界匹配，避免误伤 legend/friend 等
-            {"ocean", "sea", "beach", "shipwreck", "reef", "aquatic", "underwater", "monument"},
-            {"dungeon", "ruins", "stronghold", "fortress", "bastion", "citadel", "castle", "tower",
-                    "temple", "pyramid", "mansion", "manor", "palace", "tomb", "mineshaft", "nest",
-                    "arena", "labyrinth", "city", "forge", "keep", "shrine", "igloo", "hut", "well",
-                    "monument", "altar", "shack"}
-    };
-    private static final int STRUCT_OTHER = 6;
+    // 排序方式：0=名称，1=维度（主世界→下界→末地），2=来源模组
+    private static final int SORT_NAME = 0;
+    private static final int SORT_DIMENSION = 1;
+    private static final int SORT_SOURCE = 2;
+    private static final String[] SORT_KEYS = {"sort_name", "sort_dimension", "sort_source"};
 
     private final BossRespawnConfigScreen parent;
     private final boolean isEdit;
@@ -71,7 +65,7 @@ public class RulePickerScreen extends Screen {
     private EditBox searchStructure;
     private EditBox searchItem;
     private EditBox searchEntity;
-    private final Button[] categoryButtons = new Button[3];
+    private final Button[] sortButtons = new Button[3];
 
     private List<String> filteredStructures = new ArrayList<>();
     private List<ItemEntry> filteredItems = new ArrayList<>();
@@ -85,18 +79,9 @@ public class RulePickerScreen extends Screen {
     private int scrollItem;
     private int scrollEntity;
 
-    // 三栏的分类列表（首项恒为"全部"）、当前选中索引
-    private final List<Category>[] categories = new List[3];
-    private final int[] categorySelection = {0, 0, 0};
-    // 条目 → 在 categories 中的索引（-1 表示该组因数量为 0 未列入）
-    private int[] structureGroupToCat = new int[0];
-    private int[] entityGroupToCat = new int[0];
-    private int[] tabCategoryIndex = new int[0];
-    private int itemOtherCat = -1;
-
-    // 下拉弹窗状态：-1 关闭，0/1/2 对应三栏
-    private int openCategoryColumn = -1;
-    private int popupScroll;
+    private final int[] sortMode = {SORT_NAME, SORT_NAME, SORT_NAME};
+    /** 正在拖拽滚动条的栏，-1 表示未拖拽 */
+    private int draggingScrollColumn = -1;
 
     private int panelLeft;
     private int panelTop;
@@ -107,12 +92,15 @@ public class RulePickerScreen extends Screen {
     private int visibleRows;
     private int listAreaH;
 
-    /** 三栏各自的 x、标签 y、分类按钮 y、搜索框 y、列表 y */
+    /** 三栏各自的 x、标签 y、排序按钮 y、搜索框 y、列表 y */
     private final int[] colX = new int[3];
     private final int[] labelY = new int[3];
-    private final int[] catY = new int[3];
+    private final int[] sortY = new int[3];
     private final int[] searchBoxY = new int[3];
     private final int[] listY = new int[3];
+
+    /** 命名空间 → 模组显示名缓存 */
+    private static final Map<String, String> MOD_NAMES = new HashMap<>();
 
     public RulePickerScreen(BossRespawnConfigScreen parent, String preStructureId, String preItemId,
                             String preEntityId, boolean isEdit) {
@@ -126,7 +114,6 @@ public class RulePickerScreen extends Screen {
         this.selectedEntityId = preEntityId != null ? preEntityId : "";
 
         structureIds.addAll(BossRespawnConfigClient.getStructureIds());
-        structureIds.sort(Comparator.comparing(DisplayNames::structure));
         filteredStructures.addAll(structureIds);
 
         for (Item item : BuiltInRegistries.ITEM.stream().toList()) {
@@ -136,146 +123,55 @@ public class RulePickerScreen extends Screen {
             ResourceLocation id = BuiltInRegistries.ITEM.getKey(item);
             allItems.add(new ItemEntry(id.toString(), new ItemStack(item)));
         }
-        allItems.sort(Comparator.comparing(e -> e.stack().getHoverName().getString()));
         filteredItems.addAll(allItems);
 
         for (ResourceLocation id : BuiltInRegistries.ENTITY_TYPE.keySet()) {
             allEntities.add(id.toString());
         }
-        allEntities.sort(Comparator.comparing(RulePickerScreen::entityName));
         filteredEntities.addAll(allEntities);
 
-        buildStructureCategories();
-        buildItemCategories();
-        buildEntityCategories();
+        refreshStructureFilter();
+        refreshItemFilter();
+        refreshEntityFilter();
     }
 
-    // ---------------- 分类构建 ----------------
-
-    private static String category(String suffix) {
-        return Component.translatable("gui.bosschongsheng.config.category." + suffix).getString();
-    }
-
-    private void buildStructureCategories() {
-        int[] counts = new int[STRUCT_OTHER + 1];
-        for (String id : structureIds) {
-            counts[classifyStructure(id)]++;
-        }
-        List<Category> cats = new ArrayList<>();
-        cats.add(new Category(category("all"), structureIds.size()));
-        structureGroupToCat = new int[STRUCT_OTHER + 1];
-        for (int g = 0; g < STRUCTURE_GROUPS.length; g++) {
-            structureGroupToCat[g] = counts[g] > 0
-                    ? addCategory(cats, category("structure." + STRUCTURE_GROUPS[g]), counts[g]) : -1;
-        }
-        structureGroupToCat[STRUCT_OTHER] = counts[STRUCT_OTHER] > 0
-                ? addCategory(cats, category("structure.other"), counts[STRUCT_OTHER]) : -1;
-        categories[0] = cats;
-    }
-
-    private void buildItemCategories() {
-        // 物品分类跟随游戏内实际的创造模式物品栏（含各模组自建页）
-        List<CreativeModeTab> tabs = CreativeModeTabs.allTabs();
-        List<Set<Item>> itemsPerTab = new ArrayList<>(tabs.size());
-        for (CreativeModeTab tab : tabs) {
-            Set<Item> set = new HashSet<>();
-            for (ItemStack stack : tab.getDisplayItems()) {
-                set.add(stack.getItem());
-            }
-            itemsPerTab.add(set);
-        }
-
-        int[] tabCounts = new int[tabs.size()];
-        int otherCount = 0;
-        for (ItemEntry entry : allItems) {
-            int tab = -1;
-            Item item = entry.stack().getItem();
-            for (int t = 0; t < tabs.size(); t++) {
-                if (itemsPerTab.get(t).contains(item)) {
-                    tab = t;
-                    break;
-                }
-            }
-            entry.categoryGroup = tab;
-            if (tab >= 0) {
-                tabCounts[tab]++;
-            } else {
-                otherCount++;
-            }
-        }
-
-        List<Category> cats = new ArrayList<>();
-        cats.add(new Category(category("all"), allItems.size()));
-        tabCategoryIndex = new int[tabs.size()];
-        for (int t = 0; t < tabs.size(); t++) {
-            tabCategoryIndex[t] = tabCounts[t] > 0
-                    ? addCategory(cats, tabs.get(t).getDisplayName().getString(), tabCounts[t]) : -1;
-        }
-        itemOtherCat = otherCount > 0 ? addCategory(cats, category("item.other"), otherCount) : -1;
-        categories[1] = cats;
-    }
-
-    private void buildEntityCategories() {
-        int[] counts = new int[5];
-        for (String id : allEntities) {
-            counts[classifyEntity(id)]++;
-        }
-        String[] suffix = {"creature", "monster", "water", "ambient", "other"};
-        List<Category> cats = new ArrayList<>();
-        cats.add(new Category(category("all"), allEntities.size()));
-        entityGroupToCat = new int[5];
-        for (int g = 0; g < 5; g++) {
-            entityGroupToCat[g] = counts[g] > 0
-                    ? addCategory(cats, category("entity." + suffix[g]), counts[g]) : -1;
-        }
-        categories[2] = cats;
-    }
-
-    private static int addCategory(List<Category> cats, String label, int count) {
-        cats.add(new Category(label, count));
-        return cats.size() - 1;
-    }
-
-    private static int classifyStructure(String id) {
-        String s = id.toLowerCase(Locale.ROOT);
-        for (int g = 0; g < STRUCTURE_GROUPS.length; g++) {
-            if (g == 3) {
-                // end 边界匹配，避免误伤 legend、defend 等
-                if (s.contains("end_") || s.contains("_end") || s.contains("/end")
-                        || s.contains("end/") || s.endsWith("/end") || s.equals("end")) {
-                    return 3;
-                }
-                continue;
-            }
-            for (String kw : STRUCTURE_KEYWORDS[g]) {
-                if (s.contains(kw)) {
-                    return g;
-                }
-            }
-        }
-        return STRUCT_OTHER;
-    }
-
-    private static int classifyEntity(String id) {
-        ResourceLocation key = ResourceLocation.tryParse(id);
-        EntityType<?> type = key == null ? null : BuiltInRegistries.ENTITY_TYPE.get(key);
-        if (type == null) {
-            return 4;
-        }
-        MobCategory cat = type.getCategory();
-        return switch (cat) {
-            case CREATURE -> 0;
-            case MONSTER -> 1;
-            case WATER_CREATURE, UNDERGROUND_WATER_CREATURE, AXOLOTLS -> 2;
-            case AMBIENT -> 3;
-            default -> 4;
-        };
-    }
+    // ---------------- 名称 / 维度 / 来源 推断 ----------------
 
     private static String entityName(String id) {
         ResourceLocation key = ResourceLocation.tryParse(id);
         EntityType<?> type = key == null ? null : BuiltInRegistries.ENTITY_TYPE.get(key);
         return type == null ? id : type.getDescription().getString();
+    }
+
+    private static String namespaceOf(String id) {
+        int i = id.indexOf(':');
+        return i < 0 ? "minecraft" : id.substring(0, i);
+    }
+
+    private static String modDisplayName(String namespace) {
+        String cached = MOD_NAMES.get(namespace);
+        if (cached != null) {
+            return cached;
+        }
+        String name = namespace;
+        try {
+            name = ModList.get().getModContainerById(namespace)
+                    .map(c -> c.getModInfo().getDisplayName()).orElse(namespace);
+        } catch (Throwable ignored) {
+            // ModList 不可用时退回命名空间本身
+        }
+        MOD_NAMES.put(namespace, name);
+        return name;
+    }
+
+    /** 结构的维度推断：end 走边界匹配避免误伤 legend 等 */
+    private static int dimensionOfStructure(String id) {
+        String s = id.toLowerCase(Locale.ROOT);
+        if (s.contains("end_") || s.contains("_end") || s.contains("/end")
+                || s.contains("end/") || s.endsWith("/end") || s.equals("end")) {
+            return 2;
+        }
+        return s.contains("nether") ? 1 : 0;
     }
 
     // ---------------- 布局 ----------------
@@ -297,7 +193,7 @@ public class RulePickerScreen extends Screen {
             for (int c = 0; c < 3; c++) {
                 colX[c] = panelLeft + 10 + c * (colW + 10);
                 labelY[c] = panelTop + 20;
-                catY[c] = panelTop + 31;
+                sortY[c] = panelTop + 31;
                 searchBoxY[c] = panelTop + 49;
                 listY[c] = panelTop + 73;
             }
@@ -315,7 +211,7 @@ public class RulePickerScreen extends Screen {
                 colX[c] = panelLeft + 10;
                 int blockTop = panelTop + 24 + c * (61 + listAreaH);
                 labelY[c] = blockTop;
-                catY[c] = blockTop + 12;
+                sortY[c] = blockTop + 12;
                 searchBoxY[c] = blockTop + 29;
                 listY[c] = blockTop + 53;
             }
@@ -338,11 +234,11 @@ public class RulePickerScreen extends Screen {
 
         for (int c = 0; c < 3; c++) {
             final int column = c;
-            Button btn = Button.builder(Component.empty(), b -> toggleCategoryPopup(column))
-                    .bounds(colX[c], catY[c], colW, CAT_H).build();
-            categoryButtons[c] = btn;
+            Button btn = Button.builder(Component.empty(), b -> cycleSortMode(column))
+                    .bounds(colX[c], sortY[c], colW, SORT_H).build();
+            sortButtons[c] = btn;
             addRenderableWidget(btn);
-            updateCategoryButtonLabel(c);
+            updateSortButtonLabel(c);
         }
 
         int btnY = panelTop + panelH - 32;
@@ -357,78 +253,22 @@ public class RulePickerScreen extends Screen {
                 .bounds(panelLeft + 10 + btnW + 10, btnY, btnW, 22).build());
     }
 
-    private void updateCategoryButtonLabel(int column) {
-        Category cat = categories[column].get(categorySelection[column]);
-        String text = cat.label() + " ▾";
-        String clipped = this.font.plainSubstrByWidth(text, colW - 8);
-        categoryButtons[column].setMessage(Component.literal(clipped));
+    private void updateSortButtonLabel(int column) {
+        String text = Component.translatable("gui.bosschongsheng.config.sort_prefix").getString()
+                + Component.translatable(
+                        "gui.bosschongsheng.config." + SORT_KEYS[sortMode[column]]).getString();
+        sortButtons[column].setMessage(Component.literal(this.font.plainSubstrByWidth(text, colW - 8)));
     }
 
-    // ---------------- 过滤 ----------------
-
-    private boolean matchesStructureCategory(String id) {
-        if (categorySelection[0] == 0) {
-            return true;
-        }
-        return structureGroupToCat[classifyStructure(id)] == categorySelection[0];
-    }
-
-    private boolean matchesItemCategory(ItemEntry entry) {
-        if (categorySelection[1] == 0) {
-            return true;
-        }
-        int cat;
-        if (entry.categoryGroup < 0) {
-            cat = itemOtherCat;
+    private void cycleSortMode(int column) {
+        if (column == 0) {
+            // 结构：名称 → 维度 → 来源
+            sortMode[0] = (sortMode[0] + 1) % 3;
         } else {
-            cat = tabCategoryIndex[entry.categoryGroup];
+            // 物品 / 生物：名称 → 来源（无维度）
+            sortMode[column] = sortMode[column] == SORT_SOURCE ? SORT_NAME : SORT_SOURCE;
         }
-        return cat == categorySelection[1];
-    }
-
-    private boolean matchesEntityCategory(String id) {
-        if (categorySelection[2] == 0) {
-            return true;
-        }
-        return entityGroupToCat[classifyEntity(id)] == categorySelection[2];
-    }
-
-    private void refreshStructureFilter() {
-        String q = searchStructure != null ? searchStructure.getValue().toLowerCase(Locale.ROOT).trim() : "";
-        filteredStructures = structureIds.stream()
-                .filter(this::matchesStructureCategory)
-                .filter(id -> q.isEmpty()
-                        || id.toLowerCase(Locale.ROOT).contains(q)
-                        || DisplayNames.structure(id).toLowerCase(Locale.ROOT).contains(q))
-                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
-        scrollStructure = Math.min(scrollStructure, Math.max(0, filteredStructures.size() - visibleRows));
-    }
-
-    private void refreshItemFilter() {
-        String q = searchItem != null ? searchItem.getValue().toLowerCase(Locale.ROOT).trim() : "";
-        filteredItems = allItems.stream()
-                .filter(this::matchesItemCategory)
-                .filter(e -> q.isEmpty()
-                        || e.id().toLowerCase(Locale.ROOT).contains(q)
-                        || e.stack().getHoverName().getString().toLowerCase(Locale.ROOT).contains(q))
-                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
-        scrollItem = Math.min(scrollItem, Math.max(0, filteredItems.size() - visibleRows));
-    }
-
-    private void refreshEntityFilter() {
-        String q = searchEntity != null ? searchEntity.getValue().toLowerCase(Locale.ROOT).trim() : "";
-        filteredEntities = allEntities.stream()
-                .filter(this::matchesEntityCategory)
-                .filter(id -> q.isEmpty()
-                        || id.toLowerCase(Locale.ROOT).contains(q)
-                        || entityName(id).toLowerCase(Locale.ROOT).contains(q))
-                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
-        scrollEntity = Math.min(scrollEntity, Math.max(0, filteredEntities.size() - visibleRows));
-    }
-
-    private void selectCategory(int column, int index) {
-        categorySelection[column] = index;
-        updateCategoryButtonLabel(column);
+        updateSortButtonLabel(column);
         if (column == 0) {
             refreshStructureFilter();
         } else if (column == 1) {
@@ -436,6 +276,91 @@ public class RulePickerScreen extends Screen {
         } else {
             refreshEntityFilter();
         }
+    }
+
+    // ---------------- 搜索与排序 ----------------
+
+    /** 解析搜索词：普通文本 + {@code @模组} 来源过滤词（模组 id 或显示名，大小写不敏感） */
+    private static Query parseQuery(String raw) {
+        List<String> sources = new ArrayList<>();
+        StringBuilder text = new StringBuilder();
+        for (String token : raw.toLowerCase(Locale.ROOT).trim().split("\\s+")) {
+            if (token.isEmpty()) {
+                continue;
+            }
+            if (token.startsWith("@") && token.length() > 1) {
+                sources.add(token.substring(1));
+            } else {
+                if (text.length() > 0) {
+                    text.append(' ');
+                }
+                text.append(token);
+            }
+        }
+        return new Query(text.toString(), sources);
+    }
+
+    private static boolean matchesSource(String id, List<String> sourceFilters) {
+        if (sourceFilters.isEmpty()) {
+            return true;
+        }
+        String namespace = namespaceOf(id).toLowerCase(Locale.ROOT);
+        String modName = modDisplayName(namespaceOf(id)).toLowerCase(Locale.ROOT);
+        for (String f : sourceFilters) {
+            if (!namespace.contains(f) && !modName.contains(f)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void refreshStructureFilter() {
+        Query q = parseQuery(searchStructure != null ? searchStructure.getValue() : "");
+        int sort = sortMode[0];
+        filteredStructures = structureIds.stream()
+                .filter(id -> matchesSource(id, q.sources()))
+                .filter(id -> q.text().isEmpty()
+                        || id.toLowerCase(Locale.ROOT).contains(q.text())
+                        || DisplayNames.structure(id).toLowerCase(Locale.ROOT).contains(q.text()))
+                .sorted(Comparator
+                        .comparingInt((String id) -> sort == SORT_DIMENSION ? dimensionOfStructure(id) : 0)
+                        .thenComparing(id -> sort == SORT_SOURCE
+                                ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
+                        .thenComparing(DisplayNames::structure))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        scrollStructure = Math.min(scrollStructure, scrollMax(0));
+    }
+
+    private void refreshItemFilter() {
+        Query q = parseQuery(searchItem != null ? searchItem.getValue() : "");
+        int sort = sortMode[1];
+        filteredItems = allItems.stream()
+                .filter(e -> matchesSource(e.id(), q.sources()))
+                .filter(e -> q.text().isEmpty()
+                        || e.id().toLowerCase(Locale.ROOT).contains(q.text())
+                        || e.stack().getHoverName().getString().toLowerCase(Locale.ROOT).contains(q.text()))
+                .sorted(Comparator
+                        .comparing((ItemEntry e) -> sort == SORT_SOURCE
+                                ? namespaceOf(e.id()).toLowerCase(Locale.ROOT) : "")
+                        .thenComparing(e -> e.stack().getHoverName().getString()))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        scrollItem = Math.min(scrollItem, scrollMax(1));
+    }
+
+    private void refreshEntityFilter() {
+        Query q = parseQuery(searchEntity != null ? searchEntity.getValue() : "");
+        int sort = sortMode[2];
+        filteredEntities = allEntities.stream()
+                .filter(id -> matchesSource(id, q.sources()))
+                .filter(id -> q.text().isEmpty()
+                        || id.toLowerCase(Locale.ROOT).contains(q.text())
+                        || entityName(id).toLowerCase(Locale.ROOT).contains(q.text()))
+                .sorted(Comparator
+                        .comparing((String id) -> sort == SORT_SOURCE
+                                ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
+                        .thenComparing(RulePickerScreen::entityName))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        scrollEntity = Math.min(scrollEntity, scrollMax(2));
     }
 
     private void confirm() {
@@ -450,82 +375,144 @@ public class RulePickerScreen extends Screen {
         this.minecraft.setScreen(parent);
     }
 
-    @Override
-    public void tick() {
-        super.tick();
-        refreshStructureFilter();
-        refreshItemFilter();
-        refreshEntityFilter();
+    // ---------------- 滚动条与点击 ----------------
+
+    private int totalCount(int column) {
+        return switch (column) {
+            case 0 -> filteredStructures.size();
+            case 1 -> filteredItems.size();
+            default -> filteredEntities.size();
+        };
     }
 
-    // ---------------- 分类下拉弹窗 ----------------
+    private int currentScroll(int column) {
+        return switch (column) {
+            case 0 -> scrollStructure;
+            case 1 -> scrollItem;
+            default -> scrollEntity;
+        };
+    }
 
-    private void toggleCategoryPopup(int column) {
-        if (openCategoryColumn == column) {
-            openCategoryColumn = -1;
-        } else {
-            openCategoryColumn = column;
-            popupScroll = 0;
+    private void setScroll(int column, int value) {
+        int v = Math.max(0, Math.min(scrollMax(column), value));
+        switch (column) {
+            case 0 -> scrollStructure = v;
+            case 1 -> scrollItem = v;
+            default -> scrollEntity = v;
         }
     }
 
-    /** 返回 [x, y, w, h]；空间不足时向上展开 */
-    private int[] popupBounds() {
-        int x = colX[openCategoryColumn];
-        int h = Math.min(categories[openCategoryColumn].size(), POPUP_MAX_VISIBLE) * POPUP_ITEM_H + 2;
-        int y = catY[openCategoryColumn] + CAT_H + 2;
-        if (y + h > this.height - 2) {
-            y = catY[openCategoryColumn] - h - 2;
-        }
-        return new int[]{x, y, colW, h};
+    private int scrollMax(int column) {
+        return Math.max(0, totalCount(column) - visibleRows);
+    }
+
+    private boolean scrollBarActive(int column) {
+        return totalCount(column) > visibleRows;
+    }
+
+    private int scrollBarX(int column) {
+        return colX[column] + colW - SCROLL_BAR_W - 1;
+    }
+
+    /** 滑块高度 */
+    private int thumbHeight(int column) {
+        return Math.max(SCROLL_THUMB_MIN, listAreaH * visibleRows / totalCount(column));
+    }
+
+    private int thumbY(int column) {
+        int max = scrollMax(column);
+        int thumbH = thumbHeight(column);
+        int travel = listAreaH - thumbH;
+        return listY[column] + (max == 0 ? 0 : travel * currentScroll(column) / max);
+    }
+
+    /** 根据鼠标在轨道上的位置换算滚动量（拖滑块与点轨道跳转共用） */
+    private void applyDragScroll(int column, double mouseY) {
+        int thumbH = thumbHeight(column);
+        double ratio = (mouseY - listY[column] - thumbH / 2.0) / (listAreaH - thumbH);
+        ratio = Math.max(0, Math.min(1, ratio));
+        setScroll(column, (int) Math.round(ratio * scrollMax(column)));
+    }
+
+    private boolean isOverScrollBar(int column, double mouseX, double mouseY) {
+        return scrollBarActive(column)
+                && mouseX >= scrollBarX(column) - 2 && mouseX < scrollBarX(column) + SCROLL_BAR_W + 2
+                && mouseY >= listY[column] && mouseY < listY[column] + listAreaH;
+    }
+
+    private boolean isOverList(int column, double mouseX, double mouseY) {
+        return mouseX >= colX[column] && mouseX < colX[column] + colW
+                && mouseY >= listY[column] && mouseY < listY[column] + listAreaH;
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (openCategoryColumn >= 0) {
-            int[] b = popupBounds();
-            if (mouseX >= b[0] && mouseX < b[0] + b[2] && mouseY >= b[1] && mouseY < b[1] + b[3]) {
-                int index = (int) ((mouseY - b[1] - 1) / POPUP_ITEM_H) + popupScroll;
-                List<Category> cats = categories[openCategoryColumn];
-                if (index >= 0 && index < cats.size()) {
-                    selectCategory(openCategoryColumn, index);
+        if (button == 0) {
+            // 1) 滚动条优先：开始拖拽（点轨道任意位置也可跳转）
+            for (int c = 0; c < 3; c++) {
+                if (isOverScrollBar(c, mouseX, mouseY)) {
+                    draggingScrollColumn = c;
+                    applyDragScroll(c, mouseY);
+                    return true;
                 }
-                openCategoryColumn = -1;
-                return true;
             }
-            // 点到弹窗外部：关闭，同时把点击继续交给下方控件（如搜索框）
-            openCategoryColumn = -1;
-            return super.mouseClicked(mouseX, mouseY, button);
+            // 2) 点击列表行进行选择
+            for (int c = 0; c < 3; c++) {
+                if (isOverList(c, mouseX, mouseY)) {
+                    int row = (int) ((mouseY - listY[c]) / ROW_H) + currentScroll(c);
+                    if (selectRow(c, row)) {
+                        return true;
+                    }
+                }
+            }
         }
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
+    /** @return 该行是否存在且已选中 */
+    private boolean selectRow(int column, int row) {
+        if (column == 0) {
+            if (row < 0 || row >= filteredStructures.size()) {
+                return false;
+            }
+            selectedStructureId = filteredStructures.get(row);
+        } else if (column == 1) {
+            if (row < 0 || row >= filteredItems.size()) {
+                return false;
+            }
+            selectedItemId = filteredItems.get(row).id();
+        } else {
+            if (row < 0 || row >= filteredEntities.size()) {
+                return false;
+            }
+            selectedEntityId = filteredEntities.get(row);
+        }
+        return true;
+    }
+
+    @Override
+    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (draggingScrollColumn >= 0) {
+            applyDragScroll(draggingScrollColumn, mouseY);
+            return true;
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (draggingScrollColumn >= 0) {
+            draggingScrollColumn = -1;
+            return true;
+        }
+        return super.mouseReleased(mouseX, mouseY, button);
+    }
+
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (openCategoryColumn >= 0) {
-            int[] b = popupBounds();
-            if (mouseX >= b[0] && mouseX < b[0] + b[2] && mouseY >= b[1] && mouseY < b[1] + b[3]) {
-                int max = Math.max(0, categories[openCategoryColumn].size() - POPUP_MAX_VISIBLE);
-                popupScroll = (int) Math.max(0, Math.min(max, popupScroll - scrollY));
-                return true;
-            }
-        }
         for (int c = 0; c < 3; c++) {
-            int left = colX[c];
-            int top = listY[c];
-            if (mouseX >= left && mouseX < left + colW
-                    && mouseY >= top && mouseY < top + listAreaH) {
-                int max;
-                if (c == 0) {
-                    max = Math.max(0, filteredStructures.size() - visibleRows);
-                    scrollStructure = (int) Math.max(0, Math.min(max, scrollStructure - scrollY));
-                } else if (c == 1) {
-                    max = Math.max(0, filteredItems.size() - visibleRows);
-                    scrollItem = (int) Math.max(0, Math.min(max, scrollItem - scrollY));
-                } else {
-                    max = Math.max(0, filteredEntities.size() - visibleRows);
-                    scrollEntity = (int) Math.max(0, Math.min(max, scrollEntity - scrollY));
-                }
+            if (isOverList(c, mouseX, mouseY)) {
+                setScroll(c, currentScroll(c) - (int) scrollY);
                 return true;
             }
         }
@@ -575,13 +562,8 @@ public class RulePickerScreen extends Screen {
         drawItemRows(graphics, mouseX, mouseY);
         drawEntityRows(graphics, mouseX, mouseY);
 
-        if (openCategoryColumn >= 0) {
-            // 物品图标(renderItem)在更高的 Z 层渲染，会穿透普通 z=0 的弹窗填充，
-            // 把整个弹窗抬到更高 Z 层，避免图标/下层文字与弹窗文字重叠
-            graphics.pose().pushPose();
-            graphics.pose().translate(0, 0, 400);
-            drawCategoryPopup(graphics, mouseX, mouseY);
-            graphics.pose().popPose();
+        for (int c = 0; c < 3; c++) {
+            drawScrollBar(graphics, c, mouseX, mouseY);
         }
     }
 
@@ -589,6 +571,32 @@ public class RulePickerScreen extends Screen {
         String text = matched + "/" + total;
         int w = this.font.width(text);
         graphics.drawString(this.font, text, colX[column] + colW - w, labelY[column], COUNT_COLOR, true);
+    }
+
+    private void drawRowBackground(GuiGraphics graphics, int column, int rowY, boolean selected,
+                                   int mouseX, int mouseY) {
+        int left = colX[column];
+        int width = colW - (scrollBarActive(column) ? SCROLL_BAR_W + 2 : 0);
+        if (selected) {
+            graphics.fill(left, rowY, left + width, rowY + ROW_H, SELECTED_BG);
+        } else if (mouseX >= left && mouseX < left + width
+                && mouseY >= rowY && mouseY < rowY + ROW_H) {
+            graphics.fill(left, rowY, left + width, rowY + ROW_H, ROW_HOVER);
+        }
+    }
+
+    private void drawScrollBar(GuiGraphics graphics, int column, int mouseX, int mouseY) {
+        if (!scrollBarActive(column)) {
+            return;
+        }
+        int x = scrollBarX(column);
+        int top = listY[column];
+        graphics.fill(x, top, x + SCROLL_BAR_W, top + listAreaH, SCROLL_TRACK);
+
+        int thumbH = thumbHeight(column);
+        int y = thumbY(column);
+        boolean active = draggingScrollColumn == column || isOverScrollBar(column, mouseX, mouseY);
+        graphics.fill(x, y, x + SCROLL_BAR_W, y + thumbH, active ? SCROLL_THUMB_ACTIVE : SCROLL_THUMB);
     }
 
     private void drawStructureRows(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -601,15 +609,11 @@ public class RulePickerScreen extends Screen {
             }
             String id = filteredStructures.get(idx);
             int rowY = top + i * ROW_H;
-            if (id.equals(selectedStructureId)) {
-                graphics.fill(left, rowY, left + colW, rowY + ROW_H, SELECTED_BG);
-            } else if (mouseX >= left && mouseX < left + colW
-                    && mouseY >= rowY && mouseY < rowY + ROW_H) {
-                graphics.fill(left, rowY, left + colW, rowY + ROW_H, ROW_HOVER);
-            }
+            drawRowBackground(graphics, 0, rowY, id.equals(selectedStructureId), mouseX, mouseY);
             String name = DisplayNames.structure(id);
-            if (this.font.width(name) > colW - 6) {
-                name = this.font.plainSubstrByWidth(name, colW - 10) + "..";
+            int maxW = colW - (scrollBarActive(0) ? SCROLL_BAR_W + 8 : 10);
+            if (this.font.width(name) > maxW) {
+                name = this.font.plainSubstrByWidth(name, maxW - 4) + "..";
             }
             graphics.drawString(this.font, name, left + 4, rowY + 5, TEXT_COLOR, false);
         }
@@ -625,16 +629,12 @@ public class RulePickerScreen extends Screen {
             }
             ItemEntry e = filteredItems.get(idx);
             int rowY = top + i * ROW_H;
-            if (e.id().equals(selectedItemId)) {
-                graphics.fill(left, rowY, left + colW, rowY + ROW_H, SELECTED_BG);
-            } else if (mouseX >= left && mouseX < left + colW
-                    && mouseY >= rowY && mouseY < rowY + ROW_H) {
-                graphics.fill(left, rowY, left + colW, rowY + ROW_H, ROW_HOVER);
-            }
+            drawRowBackground(graphics, 1, rowY, e.id().equals(selectedItemId), mouseX, mouseY);
             graphics.renderItem(e.stack(), left + 2, rowY + 1);
             String name = e.stack().getHoverName().getString();
-            if (this.font.width(name) > colW - 24) {
-                name = this.font.plainSubstrByWidth(name, colW - 28) + "..";
+            int maxW = colW - (scrollBarActive(1) ? SCROLL_BAR_W + 26 : 28);
+            if (this.font.width(name) > maxW) {
+                name = this.font.plainSubstrByWidth(name, maxW - 4) + "..";
             }
             graphics.drawString(this.font, name, left + 20, rowY + 5, TEXT_COLOR, false);
         }
@@ -650,57 +650,13 @@ public class RulePickerScreen extends Screen {
             }
             String id = filteredEntities.get(idx);
             int rowY = top + i * ROW_H;
-            if (id.equals(selectedEntityId)) {
-                graphics.fill(left, rowY, left + colW, rowY + ROW_H, SELECTED_BG);
-            } else if (mouseX >= left && mouseX < left + colW
-                    && mouseY >= rowY && mouseY < rowY + ROW_H) {
-                graphics.fill(left, rowY, left + colW, rowY + ROW_H, ROW_HOVER);
-            }
+            drawRowBackground(graphics, 2, rowY, id.equals(selectedEntityId), mouseX, mouseY);
             String name = entityName(id);
-            if (this.font.width(name) > colW - 6) {
-                name = this.font.plainSubstrByWidth(name, colW - 10) + "..";
+            int maxW = colW - (scrollBarActive(2) ? SCROLL_BAR_W + 8 : 10);
+            if (this.font.width(name) > maxW) {
+                name = this.font.plainSubstrByWidth(name, maxW - 4) + "..";
             }
             graphics.drawString(this.font, name, left + 4, rowY + 5, TEXT_COLOR, false);
-        }
-    }
-
-    private void drawCategoryPopup(GuiGraphics graphics, int mouseX, int mouseY) {
-        int[] b = popupBounds();
-        int x = b[0], y = b[1], w = b[2], h = b[3];
-        List<Category> cats = categories[openCategoryColumn];
-
-        graphics.fill(x - 1, y - 1, x + w + 1, y + h + 1, PANEL_BORDER);
-        graphics.fill(x, y, x + w, y + h, LIST_BG);
-
-        int visible = Math.min(POPUP_MAX_VISIBLE, cats.size());
-        for (int i = 0; i < visible; i++) {
-            int index = i + popupScroll;
-            Category cat = cats.get(index);
-            int rowY = y + 1 + i * POPUP_ITEM_H;
-            boolean hovered = mouseX >= x && mouseX < x + w && mouseY >= rowY && mouseY < rowY + POPUP_ITEM_H;
-            boolean selected = index == categorySelection[openCategoryColumn];
-            if (selected) {
-                graphics.fill(x, rowY, x + w, rowY + POPUP_ITEM_H, SELECTED_BG);
-            } else if (hovered) {
-                graphics.fill(x, rowY, x + w, rowY + POPUP_ITEM_H, ROW_HOVER);
-            }
-            String label = this.font.plainSubstrByWidth(
-                    (selected ? "✔ " : "") + cat.label(), w - 34);
-            graphics.drawString(this.font, label, x + 4, rowY + 3, TEXT_COLOR, false);
-            String count = Integer.toString(cat.count());
-            graphics.drawString(this.font, count, x + w - 4 - this.font.width(count), rowY + 3,
-                    COUNT_COLOR, false);
-        }
-
-        // 滚动条
-        if (cats.size() > POPUP_MAX_VISIBLE) {
-            int trackX = x + w - 3;
-            graphics.fill(trackX, y + 1, trackX + 2, y + h - 1, 0xFF4A4A5A);
-            int sliderH = Math.max(8, (h - 2) * POPUP_MAX_VISIBLE / cats.size());
-            int maxScroll = cats.size() - POPUP_MAX_VISIBLE;
-            int sliderY = y + 1 + (maxScroll == 0 ? 0
-                    : (h - 2 - sliderH) * popupScroll / maxScroll);
-            graphics.fill(trackX, sliderY, trackX + 2, sliderY + sliderH, 0xFFB0B0C8);
         }
     }
 
@@ -709,26 +665,10 @@ public class RulePickerScreen extends Screen {
         this.minecraft.setScreen(parent);
     }
 
-    private record Category(String label, int count) {
+    /** 解析后的搜索条件 */
+    private record Query(String text, List<String> sources) {
     }
 
-    private static final class ItemEntry {
-        private final String id;
-        private final ItemStack stack;
-        /** 所属创造物品栏在 CreativeModeTabs.allTabs() 中的下标，-1 表示不属于任何物品栏 */
-        private int categoryGroup = -1;
-
-        private ItemEntry(String id, ItemStack stack) {
-            this.id = id;
-            this.stack = stack;
-        }
-
-        private String id() {
-            return id;
-        }
-
-        private ItemStack stack() {
-            return stack;
-        }
+    private record ItemEntry(String id, ItemStack stack) {
     }
 }
