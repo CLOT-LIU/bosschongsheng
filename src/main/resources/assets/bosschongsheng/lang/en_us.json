@@ -23,8 +23,15 @@
   "gui.bosschongsheng.config.sort_name": "Name",
   "gui.bosschongsheng.config.sort_dimension": "Dimension",
   "gui.bosschongsheng.config.sort_source": "Source",
+  "gui.bosschongsheng.config.dimension_overworld": "Overworld",
+  "gui.bosschongsheng.config.dimension_nether": "The Nether",
+  "gui.bosschongsheng.config.dimension_end": "The End",
   "gui.bosschongsheng.config.protection_on": "Spawn Protection: ON",
   "gui.bosschongsheng.config.protection_off": "Spawn Protection: OFF",
   "gui.bosschongsheng.config.protection_seconds": "Invuln. time",
-  "gui.bosschongsheng.config.seconds_unit": "s"
+  "gui.bosschongsheng.config.seconds_unit": "s",
+  "gui.bosschongsheng.config.spawn_distance": "Distance",
+  "gui.bosschongsheng.config.blocks_unit": "blk",
+  "gui.bosschongsheng.config.misc_hidden": "Misc: OFF",
+  "gui.bosschongsheng.config.misc_shown": "Misc: ON"
 }

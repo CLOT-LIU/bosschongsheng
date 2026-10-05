@@ -35,7 +35,8 @@ public record ReloadBossRulesPayload() implements CustomPacketPayload {
                             r.structureId(), r.triggerItemId(), r.entityTypeId()))
                     .toList();
             PacketDistributor.sendToPlayer(player, new BossRespawnListPayload(rules, true,
-                    cfg.isSpawnProtectionEnabled(), cfg.getSpawnProtectionSeconds()));
+                    cfg.isSpawnProtectionEnabled(), cfg.getSpawnProtectionSeconds(),
+                    cfg.getSpawnDistance()));
         });
     }
 

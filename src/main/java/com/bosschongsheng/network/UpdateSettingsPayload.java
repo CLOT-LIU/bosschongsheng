@@ -17,7 +17,8 @@ import java.util.List;
 /**
  * 客户端 -> 服务端：修改出生保护全局设置，立即写入 boss_respawn.json 并回传最新配置
  */
-public record UpdateSettingsPayload(boolean spawnProtectionEnabled, int spawnProtectionSeconds)
+public record UpdateSettingsPayload(boolean spawnProtectionEnabled, int spawnProtectionSeconds,
+                                    int spawnDistance)
         implements CustomPacketPayload {
     public static final Type<UpdateSettingsPayload> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(BossChongsheng.MOD_ID, "update_settings"));
@@ -27,8 +28,9 @@ public record UpdateSettingsPayload(boolean spawnProtectionEnabled, int spawnPro
                     (buf, payload) -> {
                         buf.writeBoolean(payload.spawnProtectionEnabled());
                         buf.writeInt(payload.spawnProtectionSeconds());
+                        buf.writeInt(payload.spawnDistance());
                     },
-                    buf -> new UpdateSettingsPayload(buf.readBoolean(), buf.readInt())
+                    buf -> new UpdateSettingsPayload(buf.readBoolean(), buf.readInt(), buf.readInt())
             );
 
     public static void handle(UpdateSettingsPayload payload, IPayloadContext context) {
@@ -37,7 +39,8 @@ public record UpdateSettingsPayload(boolean spawnProtectionEnabled, int spawnPro
                 return;
             }
             BossRespawnConfig cfg = BossRespawnConfig.getInstance();
-            cfg.updateSettings(payload.spawnProtectionEnabled(), payload.spawnProtectionSeconds());
+            cfg.updateSettings(payload.spawnProtectionEnabled(), payload.spawnProtectionSeconds(),
+                    payload.spawnDistance());
             if (cfg.saveToFile()) {
                 player.displayClientMessage(
                         Component.translatable("gui.bosschongsheng.config.saved"), true);
@@ -50,7 +53,8 @@ public record UpdateSettingsPayload(boolean spawnProtectionEnabled, int spawnPro
                             r.structureId(), r.triggerItemId(), r.entityTypeId()))
                     .toList();
             PacketDistributor.sendToPlayer(player, new BossRespawnListPayload(
-                    rules, cfg.isSpawnProtectionEnabled(), cfg.getSpawnProtectionSeconds()));
+                    rules, cfg.isSpawnProtectionEnabled(), cfg.getSpawnProtectionSeconds(),
+                    cfg.getSpawnDistance()));
         });
     }
 

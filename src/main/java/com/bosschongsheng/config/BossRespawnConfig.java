@@ -33,6 +33,8 @@ public final class BossRespawnConfig {
     private boolean spawnProtectionEnabled = true;
     /** 出生保护时长（秒），仅在开启时生效 */
     private int spawnProtectionSeconds = 5;
+    /** 生成距离（格）：在玩家正前方该距离内找出生点 */
+    private int spawnDistance = 6;
 
     public static BossRespawnConfig getInstance() {
         if (instance == null) {
@@ -78,13 +80,18 @@ public final class BossRespawnConfig {
         return spawnProtectionSeconds;
     }
 
+    public int getSpawnDistance() {
+        return spawnDistance;
+    }
+
     /**
-     * 更新全局设置；seconds 会被收敛到 1～600 秒。
+     * 更新全局设置；seconds 收敛到 1～600 秒，distance 收敛到 2～16 格。
      * 调用方负责后续 {@link #saveToFile()} 持久化。
      */
-    public void updateSettings(boolean enabled, int seconds) {
+    public void updateSettings(boolean enabled, int seconds, int distance) {
         this.spawnProtectionEnabled = enabled;
         this.spawnProtectionSeconds = Math.max(1, Math.min(600, seconds));
+        this.spawnDistance = Math.max(2, Math.min(16, distance));
     }
 
     public boolean saveToFile() {
@@ -93,6 +100,7 @@ public final class BossRespawnConfig {
             JsonObject root = new JsonObject();
             root.add("spawnProtection", new JsonPrimitive(spawnProtectionEnabled));
             root.add("spawnProtectionSeconds", new JsonPrimitive(spawnProtectionSeconds));
+            root.add("spawnDistance", new JsonPrimitive(spawnDistance));
             JsonArray arr = new JsonArray();
             for (BossRespawnRule r : rules.values()) {
                 JsonObject o = new JsonObject();
@@ -130,6 +138,10 @@ public final class BossRespawnConfig {
             if (root.has("spawnProtectionSeconds")) {
                 spawnProtectionSeconds = Math.max(1, Math.min(600,
                         root.get("spawnProtectionSeconds").getAsInt()));
+            }
+            if (root.has("spawnDistance")) {
+                spawnDistance = Math.max(2, Math.min(16,
+                        root.get("spawnDistance").getAsInt()));
             }
             if (root.has("rules")) {
                 JsonArray arr = root.getAsJsonArray("rules");

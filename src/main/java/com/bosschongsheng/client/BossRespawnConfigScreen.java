@@ -1,11 +1,18 @@
 package com.bosschongsheng.client;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+import org.lwjgl.glfw.GLFW;
+
 import com.bosschongsheng.client.BossRespawnConfigClient.RuleEntry;
 import com.bosschongsheng.network.ReloadBossRulesPayload;
 import com.bosschongsheng.network.RemoveBossRulePayload;
 import com.bosschongsheng.network.RequestConfigPayload;
 import com.bosschongsheng.network.SaveBossRulesPayload;
 import com.bosschongsheng.network.UpdateSettingsPayload;
+
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -17,11 +24,6 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.neoforged.neoforge.network.PacketDistributor;
-import org.lwjgl.glfw.GLFW;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
 
 /**
  * Boss 重生规则列表配置界面
@@ -49,11 +51,15 @@ public class BossRespawnConfigScreen extends Screen {
     private EditBox searchBox;
     private Button protectionToggle;
     private EditBox secondsBox;
+    private EditBox distanceBox;
     private int secondsLabelX;
     private int secondsUnitX;
+    private int distLabelX;
+    private int distUnitX;
     private int settingsRowY;
     private boolean protectionEnabled;
     private int protectionSeconds;
+    private int spawnDistance;
     private List<RuleEntry> filteredList = new ArrayList<>();
     private int scrollOffset;
     private String pendingDeleteId;
@@ -121,9 +127,10 @@ public class BossRespawnConfigScreen extends Screen {
         searchBox.setMaxLength(64);
         addRenderableWidget(searchBox);
 
-        // 出生保护设置行：开关按钮 + 无敌时长输入
+        // 出生保护设置行：开关按钮 + 无敌时长输入 + 生成距离输入
         protectionEnabled = BossRespawnConfigClient.isSpawnProtectionEnabled();
         protectionSeconds = BossRespawnConfigClient.getSpawnProtectionSeconds();
+        spawnDistance = BossRespawnConfigClient.getSpawnDistance();
         int settingsY = topPos + 54;
         settingsRowY = settingsY;
         protectionToggle = Button.builder(protectionLabel(), b -> toggleProtection())
@@ -139,6 +146,15 @@ public class BossRespawnConfigScreen extends Screen {
         secondsBox.setEditable(protectionEnabled);
         addRenderableWidget(secondsBox);
         secondsUnitX = secondsX + 38 + 4;
+
+        distLabelX = secondsUnitX + this.font.width(secondsUnitLabel()) + 10;
+        int distX = distLabelX + this.font.width(distanceLabel()) + 4;
+        distanceBox = new EditBox(this.font, distX, settingsY, 30, 20, Component.empty());
+        distanceBox.setMaxLength(2);
+        distanceBox.setFilter(s -> s.isEmpty() || s.matches("\\d{1,2}"));
+        distanceBox.setValue(String.valueOf(spawnDistance));
+        addRenderableWidget(distanceBox);
+        distUnitX = distX + 30 + 4;
 
         int btnY = topPos + panelH - 27;
         int bw = 52;
@@ -184,6 +200,18 @@ public class BossRespawnConfigScreen extends Screen {
         return Component.translatable("gui.bosschongsheng.config.protection_seconds").getString();
     }
 
+    private String secondsUnitLabel() {
+        return Component.translatable("gui.bosschongsheng.config.seconds_unit").getString();
+    }
+
+    private String distanceLabel() {
+        return Component.translatable("gui.bosschongsheng.config.spawn_distance").getString();
+    }
+
+    private String distanceUnitLabel() {
+        return Component.translatable("gui.bosschongsheng.config.blocks_unit").getString();
+    }
+
     private void toggleProtection() {
         protectionEnabled = !protectionEnabled;
         protectionToggle.setMessage(protectionLabel());
@@ -210,21 +238,44 @@ public class BossRespawnConfigScreen extends Screen {
         }
     }
 
+    /** 读取生成距离输入并收敛到 2～16 格；resetBox 为 true 时把收敛结果写回输入框 */
+    private void commitDistance(boolean resetBox) {
+        int distance;
+        try {
+            distance = Integer.parseInt(distanceBox.getValue().trim());
+        } catch (NumberFormatException e) {
+            distance = 6;
+        }
+        distance = Math.max(2, Math.min(16, distance));
+        spawnDistance = distance;
+        if (resetBox) {
+            distanceBox.setValue(String.valueOf(distance));
+            distanceBox.setFocused(false);
+        }
+    }
+
     private void sendSettings() {
         commitSeconds(false);
-        BossRespawnConfigClient.setSettings(protectionEnabled, protectionSeconds);
+        commitDistance(false);
+        BossRespawnConfigClient.setSettings(protectionEnabled, protectionSeconds, spawnDistance);
         PacketDistributor.sendToServer(
-                new UpdateSettingsPayload(protectionEnabled, protectionSeconds));
+                new UpdateSettingsPayload(protectionEnabled, protectionSeconds, spawnDistance));
     }
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        // 时长输入框内按回车（含小键盘回车）即提交
-        if (secondsBox != null && secondsBox.isFocused()
-                && (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER)) {
-            commitSeconds(true);
-            sendSettings();
-            return true;
+        // 时长 / 距离输入框内按回车（含小键盘回车）即提交
+        if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
+            if (secondsBox != null && secondsBox.isFocused()) {
+                commitSeconds(true);
+                sendSettings();
+                return true;
+            }
+            if (distanceBox != null && distanceBox.isFocused()) {
+                commitDistance(true);
+                sendSettings();
+                return true;
+            }
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
@@ -306,9 +357,12 @@ public class BossRespawnConfigScreen extends Screen {
         int labelColor = protectionEnabled ? 0xE0E0E0 : 0xFF6B6B6B;
         graphics.drawString(this.font, protectionSecondsLabel(),
                 secondsLabelX, settingsRowY + 6, labelColor, false);
-        graphics.drawString(this.font,
-                Component.translatable("gui.bosschongsheng.config.seconds_unit").getString(),
+        graphics.drawString(this.font, secondsUnitLabel(),
                 secondsUnitX, settingsRowY + 6, labelColor, false);
+        graphics.drawString(this.font, distanceLabel(),
+                distLabelX, settingsRowY + 6, 0xE0E0E0, false);
+        graphics.drawString(this.font, distanceUnitLabel(),
+                distUnitX, settingsRowY + 6, 0xE0E0E0, false);
 
         int listTop = y + LIST_TOP_OFFSET;
         int colStruct = x + 10 + 4;

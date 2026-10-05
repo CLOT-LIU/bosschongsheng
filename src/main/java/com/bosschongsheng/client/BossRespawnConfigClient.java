@@ -11,6 +11,7 @@ public final class BossRespawnConfigClient {
     private static final List<RuleEntry> RULE_LIST = new ArrayList<>();
     private static boolean spawnProtectionEnabled = true;
     private static int spawnProtectionSeconds = 5;
+    private static int spawnDistance = 6;
     private static String lastError;
 
     private BossRespawnConfigClient() {
@@ -38,9 +39,10 @@ public final class BossRespawnConfigClient {
         return new ArrayList<>(RULE_LIST);
     }
 
-    public static void setSettings(boolean enabled, int seconds) {
+    public static void setSettings(boolean enabled, int seconds, int distance) {
         spawnProtectionEnabled = enabled;
         spawnProtectionSeconds = seconds;
+        spawnDistance = distance;
     }
 
     public static boolean isSpawnProtectionEnabled() {
@@ -49,6 +51,10 @@ public final class BossRespawnConfigClient {
 
     public static int getSpawnProtectionSeconds() {
         return spawnProtectionSeconds;
+    }
+
+    public static int getSpawnDistance() {
+        return spawnDistance;
     }
 
     public static void setLastError(String err) {

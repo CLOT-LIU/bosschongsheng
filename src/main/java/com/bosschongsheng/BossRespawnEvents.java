@@ -61,12 +61,6 @@ public final class BossRespawnEvents {
             ATTACHMENTS.register("spawn_invuln_until",
                     () -> AttachmentType.builder(() -> -1L).serialize(Codec.LONG).build());
 
-    /**
-     * 出生位置尝试距离（格），沿玩家正前方由远到近依次尝试；
-     * 具体保护时长由配置决定（见 {@link BossRespawnConfig#getSpawnProtectionSeconds()}）。
-     */
-    private static final double[] SPAWN_DISTANCES = {6.0D, 5.0D, 4.0D, 3.0D};
-
     private BossRespawnEvents() {
     }
 
@@ -186,7 +180,8 @@ public final class BossRespawnEvents {
     }
 
     /**
-     * 沿玩家水平朝向（正前方），按 {@link #SPAWN_DISTANCES} 由远到近逐列寻找地面：
+     * 沿玩家水平朝向（正前方），从配置的生成距离（{@link BossRespawnConfig#getSpawnDistance()}）
+     * 开始由远到近逐列寻找地面（最多回退 3 格，最近 2 格）：
      * 要求脚下有碰撞面、身体空间不被方块卡住且不在液体中。
      *
      * @return 安全出生点（y 为脚底高度）；全部距离都不合适时返回 null
@@ -199,7 +194,9 @@ public final class BossRespawnEvents {
         double forwardX = -Math.sin(yawRad);
         double forwardZ = Math.cos(yawRad);
         int baseY = player.blockPosition().getY();
-        for (double dist : SPAWN_DISTANCES) {
+        int maxDist = BossRespawnConfig.getInstance().getSpawnDistance();
+        int minDist = Math.max(2, maxDist - 3);
+        for (int dist = maxDist; dist >= minDist; dist--) {
             double x = player.getX() + forwardX * dist;
             double z = player.getZ() + forwardZ * dist;
             for (int dy = 2; dy >= -6; dy--) {

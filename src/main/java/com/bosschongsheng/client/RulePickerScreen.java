@@ -12,6 +12,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -55,12 +56,19 @@ public class RulePickerScreen extends Screen {
     private static final int HEADER_BG = 0xFF242430;
     private static final int HEADER_LINE = 0xFF4C5470;
     private static final int HEADER_COLOR = 0xFF9ECBFF;
+    /** 显示杂项时，被过滤实体（投掷物、船、空名实体等）的名称颜色 */
+    private static final int MISC_TEXT_COLOR = 0xFF8C8C9E;
 
     // 排序方式：0=名称，1=维度（主世界→下界→末地），2=来源模组
     private static final int SORT_NAME = 0;
     private static final int SORT_DIMENSION = 1;
     private static final int SORT_SOURCE = 2;
     private static final String[] SORT_KEYS = {"sort_name", "sort_dimension", "sort_source"};
+    /** 维度分组标题语言键，下标与 {@link #dimensionOfStructure} 返回值对应 */
+    private static final String[] DIM_KEYS = {
+            "gui.bosschongsheng.config.dimension_overworld",
+            "gui.bosschongsheng.config.dimension_nether",
+            "gui.bosschongsheng.config.dimension_end"};
 
     private final BossRespawnConfigScreen parent;
     private final boolean isEdit;
@@ -83,11 +91,6 @@ public class RulePickerScreen extends Screen {
             new ArrayList<Object>(), new ArrayList<Object>(), new ArrayList<Object>());
     /** 首次构建视图时把已选中的项滚动到可见位置（编辑模式用），消费一次后失效 */
     private final boolean[] revealSelected = {true, true, true};
-
-    /** 悬停提示请求（行绘制时收集，所有内容画完后统一弹出，避免被后续行覆盖） */
-    private List<net.minecraft.util.FormattedCharSequence> pendingTooltip;
-    private int pendingTooltipX;
-    private int pendingTooltipY;
 
     private String selectedStructureId;
     private String selectedItemId;
@@ -116,6 +119,13 @@ public class RulePickerScreen extends Screen {
     private final int[] sortY = new int[3];
     private final int[] searchBoxY = new int[3];
     private final int[] listY = new int[3];
+
+    /** 生物 id → 是否为可召唤生物（名称非空且为活体或常规生物类别）的分类缓存 */
+    private static final Map<String, Boolean> CREATURE_CACHE = new HashMap<>();
+    /** 生物栏是否隐藏杂项实体（投掷物、船、空名实体等）；static 让本次游戏会话内保持选择 */
+    private static boolean entityFilterEnabled = true;
+
+    private Button miscFilterButton;
 
     /** 命名空间 → 模组显示名缓存 */
     private static final Map<String, String> MOD_NAMES = new HashMap<>();
@@ -155,6 +165,11 @@ public class RulePickerScreen extends Screen {
         }
         filteredEntities.addAll(allEntities);
 
+        // 编辑规则时若已选中的生物属于被过滤的杂项，自动放开过滤，避免选中项看不见
+        if (isEdit && !selectedEntityId.isEmpty() && !isCreature(selectedEntityId)) {
+            entityFilterEnabled = false;
+        }
+
         refreshStructureFilter();
         refreshItemFilter();
         refreshEntityFilter();
@@ -171,6 +186,26 @@ public class RulePickerScreen extends Screen {
     private static String namespaceOf(String id) {
         int i = id.indexOf(':');
         return i < 0 ? "minecraft" : id.substring(0, i);
+    }
+
+    /**
+     * 是否适合作为召唤生物展示：名称非空，且为生物——
+     * 生物类别非 MISC 的直接保留；MISC 类别（盔甲架、船、投掷物等）创建实例确认是
+     * {@link LivingEntity} 才保留（盔甲架保留，箭/船/矿车等过滤）。结果缓存。
+     */
+    private static boolean isCreature(String id) {
+        Boolean cached = CREATURE_CACHE.get(id);
+        if (cached != null) {
+            return cached;
+        }
+        boolean result = false;
+        ResourceLocation key = ResourceLocation.tryParse(id);
+        EntityType<?> type = key == null ? null : BuiltInRegistries.ENTITY_TYPE.get(key);
+        if (type != null && !type.getDescription().getString().isBlank()) {
+            result = type.getCategory() != MobCategory.MISC || entityForRender(id) != null;
+        }
+        CREATURE_CACHE.put(id, result);
+        return result;
     }
 
     private static String modDisplayName(String namespace) {
@@ -259,12 +294,22 @@ public class RulePickerScreen extends Screen {
 
         for (int c = 0; c < 3; c++) {
             final int column = c;
+            // 生物栏的排序按钮让出右侧 50px 给"杂项"过滤切换按钮
+            int sortW = c == 2 ? colW - 50 : colW;
             Button btn = Button.builder(Component.empty(), b -> cycleSortMode(column))
-                    .bounds(colX[c], sortY[c], colW, SORT_H).build();
+                    .bounds(colX[c], sortY[c], sortW, SORT_H).build();
             sortButtons[c] = btn;
             addRenderableWidget(btn);
             updateSortButtonLabel(c);
         }
+
+        // 生物栏：杂项实体（投掷物、船、空名实体等）显示/隐藏切换
+        miscFilterButton = Button.builder(miscFilterLabel(), b -> {
+            entityFilterEnabled = !entityFilterEnabled;
+            miscFilterButton.setMessage(miscFilterLabel());
+            refreshEntityFilter();
+        }).bounds(colX[2] + colW - 46, sortY[2], 46, SORT_H).build();
+        addRenderableWidget(miscFilterButton);
 
         int btnY = panelTop + panelH - 32;
         int btnW = 70;
@@ -287,7 +332,14 @@ public class RulePickerScreen extends Screen {
         String text = Component.translatable("gui.bosschongsheng.config.sort_prefix").getString()
                 + Component.translatable(
                         "gui.bosschongsheng.config." + SORT_KEYS[sortMode[column]]).getString();
-        sortButtons[column].setMessage(Component.literal(this.font.plainSubstrByWidth(text, colW - 8)));
+        int maxW = (column == 2 ? colW - 50 : colW) - 8;
+        sortButtons[column].setMessage(Component.literal(this.font.plainSubstrByWidth(text, maxW)));
+    }
+
+    private Component miscFilterLabel() {
+        return Component.translatable(entityFilterEnabled
+                ? "gui.bosschongsheng.config.misc_hidden"
+                : "gui.bosschongsheng.config.misc_shown");
     }
 
     private void cycleSortMode(int column) {
@@ -381,9 +433,9 @@ public class RulePickerScreen extends Screen {
                                 ? namespaceOf(id).toLowerCase(Locale.ROOT) : "")
                         .thenComparing(DisplayNames::structure))
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
-        // 来源排序时分组保持完整，选中项在组内置顶（由 rebuildView 处理）；其余排序全局置顶
-        filteredStructures = sort == SORT_SOURCE
-                ? list : pinSelectedFirst(list, id -> id.equals(selectedStructureId));
+        // 来源 / 维度排序时分组保持完整，选中项在组内置顶（由 rebuildView 处理）；名称排序全局置顶
+        filteredStructures = sort == SORT_NAME
+                ? pinSelectedFirst(list, id -> id.equals(selectedStructureId)) : list;
         rebuildView(0);
         scrollStructure = Math.min(scrollStructure, scrollMax(0));
     }
@@ -411,6 +463,7 @@ public class RulePickerScreen extends Screen {
         Query q = parseQuery(searchEntity != null ? searchEntity.getValue() : "");
         int sort = sortMode[2];
         List<String> list = allEntities.stream()
+                .filter(id -> !entityFilterEnabled || isCreature(id))
                 .filter(id -> matchesSource(id, q.sources()))
                 .filter(id -> q.text().isEmpty()
                         || id.toLowerCase(Locale.ROOT).contains(q.text())
@@ -442,8 +495,13 @@ public class RulePickerScreen extends Screen {
     }
 
     /**
-     * 按当前排序构建实际渲染的视图行：来源排序时按模组分组并插入 {@link HeaderRow}，
-     * 组按模组显示名排序，已选中的项固定在组内第一项；其余排序为平铺列表。
+     * 按当前排序构建实际渲染的视图行：
+     * <ul>
+     *   <li>来源排序：按模组分组，组按模组显示名排序；</li>
+     *   <li>结构栏维度排序：按主世界/下界/末地分组；</li>
+     *   <li>其余排序：平铺列表。</li>
+     * </ul>
+     * 分组视图中已选中的项固定在本组第一项。
      */
     private void rebuildView(int column) {
         List<Object> view = viewRows.get(column);
@@ -454,24 +512,31 @@ public class RulePickerScreen extends Screen {
             default -> filteredEntities;
         };
 
-        if (sortMode[column] != SORT_SOURCE) {
+        boolean byDimension = column == 0 && sortMode[column] == SORT_DIMENSION;
+        boolean grouped = byDimension || sortMode[column] == SORT_SOURCE;
+        if (!grouped) {
             view.addAll(entries);
             return;
         }
 
-        // entries 已按 namespace + 名称排序，用 LinkedHashMap 分组保持组内顺序
+        // entries 已按分组键 + 名称排序，用 LinkedHashMap 分组保持组内顺序
         Map<String, List<Object>> groups = new java.util.LinkedHashMap<>();
         for (Object e : entries) {
-            groups.computeIfAbsent(namespaceOf(entryId(column, e)), k -> new ArrayList<>()).add(e);
+            groups.computeIfAbsent(groupKey(column, e), k -> new ArrayList<>()).add(e);
         }
-        List<String> namespaces = new ArrayList<>(groups.keySet());
-        namespaces.sort(Comparator
-                .comparing((String ns) -> modDisplayName(ns).toLowerCase(Locale.ROOT))
-                .thenComparing(ns -> ns.toLowerCase(Locale.ROOT)));
+        List<String> keys = new ArrayList<>(groups.keySet());
+        if (byDimension) {
+            // 维度键为 "0"/"1"/"2"，按维度顺序（主世界→下界→末地）排列
+            keys.sort(Comparator.comparingInt(Integer::parseInt));
+        } else {
+            keys.sort(Comparator
+                    .comparing((String ns) -> modDisplayName(ns).toLowerCase(Locale.ROOT))
+                    .thenComparing(ns -> ns.toLowerCase(Locale.ROOT)));
+        }
 
         String selected = selectedIdOf(column);
-        for (String ns : namespaces) {
-            List<Object> group = groups.get(ns);
+        for (String key : keys) {
+            List<Object> group = groups.get(key);
             // 选中项在组内置顶
             if (selected != null && !selected.isEmpty()) {
                 for (int i = 0; i < group.size(); i++) {
@@ -481,7 +546,7 @@ public class RulePickerScreen extends Screen {
                     }
                 }
             }
-            view.add(new HeaderRow(ns, modDisplayName(ns), group.size()));
+            view.add(new HeaderRow(groupTitle(column, key), group.size()));
             view.addAll(group);
         }
 
@@ -496,6 +561,23 @@ public class RulePickerScreen extends Screen {
                 }
             }
         }
+    }
+
+    /** 分组键：维度排序为维度序号字符串，其余为 id 的命名空间 */
+    private String groupKey(int column, Object entry) {
+        String id = entryId(column, entry);
+        if (column == 0 && sortMode[column] == SORT_DIMENSION) {
+            return String.valueOf(dimensionOfStructure(id));
+        }
+        return namespaceOf(id);
+    }
+
+    /** 分组标题：维度排序为维度显示名，其余为模组显示名 */
+    private String groupTitle(int column, String key) {
+        if (column == 0 && sortMode[column] == SORT_DIMENSION) {
+            return Component.translatable(DIM_KEYS[Integer.parseInt(key)]).getString();
+        }
+        return modDisplayName(key);
     }
 
     private void confirm() {
@@ -661,7 +743,6 @@ public class RulePickerScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         renderBackground(graphics, mouseX, mouseY, partialTick);
-        pendingTooltip = null;
 
         graphics.fill(panelLeft, panelTop, panelLeft + panelW, panelTop + panelH, PANEL_BG);
         graphics.fill(panelLeft, panelTop, panelLeft + panelW, panelTop + 1, PANEL_BORDER);
@@ -697,11 +778,6 @@ public class RulePickerScreen extends Screen {
         for (int c = 0; c < 3; c++) {
             drawScrollBar(graphics, c, mouseX, mouseY);
         }
-
-        // 悬停提示最后弹出，覆盖在所有行与滚动条之上
-        if (pendingTooltip != null) {
-            graphics.renderTooltip(this.font, pendingTooltip, pendingTooltipX, pendingTooltipY);
-        }
     }
 
     private void drawCount(GuiGraphics graphics, int column, int matched, int total) {
@@ -736,8 +812,8 @@ public class RulePickerScreen extends Screen {
         graphics.fill(x, y, x + SCROLL_BAR_W, y + thumbH, active ? SCROLL_THUMB_ACTIVE : SCROLL_THUMB);
     }
 
-    /** 来源分组标题行：命名空间、模组显示名、组内条目数 */
-    private record HeaderRow(String namespace, String title, int count) {
+    /** 分组标题行：组名 + 右侧数量 */
+    private record HeaderRow(String title, int count) {
     }
 
     /** 超长文本截断并加省略号；maxW 异常小（窄栏）时至少保留 1px */
@@ -749,21 +825,8 @@ public class RulePickerScreen extends Screen {
         return this.font.plainSubstrByWidth(text, Math.max(1, maxW - dots)) + "..";
     }
 
-    /** 鼠标悬停在指定行内时，登记一个完整文本提示（渲染末尾统一弹出） */
-    private void queueLineTooltip(int left, int rowY, int width,
-                                  Component text, int mouseX, int mouseY) {
-        if (pendingTooltip == null
-                && mouseX >= left && mouseX < left + width
-                && mouseY >= rowY && mouseY < rowY + ROW_H) {
-            pendingTooltip = java.util.List.of(text.getVisualOrderText());
-            pendingTooltipX = mouseX;
-            pendingTooltipY = mouseY;
-        }
-    }
-
-    /** 来源分组标题行：模组显示名 + 右侧数量；悬停显示完整模组名与命名空间 */
-    private void drawHeaderRow(GuiGraphics graphics, int column, int rowY, HeaderRow header,
-                               int mouseX, int mouseY) {
+    /** 分组标题行：组名 + 右侧数量 */
+    private void drawHeaderRow(GuiGraphics graphics, int column, int rowY, HeaderRow header) {
         int left = colX[column];
         int width = colW - (scrollBarActive(column) ? SCROLL_BAR_W + 2 : 0);
         graphics.fill(left, rowY, left + width, rowY + ROW_H, HEADER_BG);
@@ -776,18 +839,6 @@ public class RulePickerScreen extends Screen {
         int titleMaxW = width - countW - 12;
         String shown = ellipsize(header.title(), titleMaxW);
         graphics.drawString(this.font, shown, left + 3, rowY + 5, HEADER_COLOR, false);
-
-        // 悬停提示：第一行完整模组名，第二行灰色命名空间
-        if (pendingTooltip == null
-                && mouseX >= left && mouseX < left + width
-                && mouseY >= rowY && mouseY < rowY + ROW_H) {
-            pendingTooltip = java.util.List.of(
-                    Component.literal(header.title()).getVisualOrderText(),
-                    Component.literal(header.namespace())
-                            .withStyle(net.minecraft.ChatFormatting.GRAY).getVisualOrderText());
-            pendingTooltipX = mouseX;
-            pendingTooltipY = mouseY;
-        }
     }
 
     private void drawStructureRows(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -802,7 +853,7 @@ public class RulePickerScreen extends Screen {
             Object row = view.get(idx);
             int rowY = top + i * ROW_H;
             if (row instanceof HeaderRow header) {
-                drawHeaderRow(graphics, 0, rowY, header, mouseX, mouseY);
+                drawHeaderRow(graphics, 0, rowY, header);
                 continue;
             }
             String id = (String) row;
@@ -811,10 +862,6 @@ public class RulePickerScreen extends Screen {
             int maxW = colW - (scrollBarActive(0) ? SCROLL_BAR_W + 8 : 10);
             String name = ellipsize(fullName, maxW);
             graphics.drawString(this.font, name, left + 4, rowY + 5, TEXT_COLOR, false);
-            if (!name.equals(fullName)) {
-                queueLineTooltip(left, rowY, maxW,
-                        Component.literal(fullName), mouseX, mouseY);
-            }
         }
     }
 
@@ -830,7 +877,7 @@ public class RulePickerScreen extends Screen {
             Object row = view.get(idx);
             int rowY = top + i * ROW_H;
             if (row instanceof HeaderRow header) {
-                drawHeaderRow(graphics, 1, rowY, header, mouseX, mouseY);
+                drawHeaderRow(graphics, 1, rowY, header);
                 continue;
             }
             ItemEntry e = (ItemEntry) row;
@@ -840,10 +887,6 @@ public class RulePickerScreen extends Screen {
             int maxW = colW - (scrollBarActive(1) ? SCROLL_BAR_W + 26 : 28);
             String name = ellipsize(fullName, maxW);
             graphics.drawString(this.font, name, left + 20, rowY + 5, TEXT_COLOR, false);
-            if (!name.equals(fullName)) {
-                queueLineTooltip(left, rowY, colW,
-                        Component.literal(fullName), mouseX, mouseY);
-            }
         }
     }
 
@@ -927,7 +970,7 @@ public class RulePickerScreen extends Screen {
             Object rowObj = view.get(idx);
             int rowY = top + i * ROW_H;
             if (rowObj instanceof HeaderRow header) {
-                drawHeaderRow(graphics, 2, rowY, header, mouseX, mouseY);
+                drawHeaderRow(graphics, 2, rowY, header);
                 continue;
             }
             String id = (String) rowObj;
@@ -950,16 +993,18 @@ public class RulePickerScreen extends Screen {
                 float fitted = (box - 2) / Math.max(effW, effH) * 0.95f;
                 renderEntityIcon(graphics, boxX1, boxY1, boxX2, boxY2, entity, fitted);
             }
+            // 显示杂项时，被过滤的实体名称用灰色区分；名称为空（无名实体）时退回显示 id
+            boolean misc = !isCreature(id);
             String fullName = entityName(id);
+            if (misc && fullName.isBlank()) {
+                fullName = id;
+            }
             int textX = left + (entity != null ? ROW_H + 2 : 4);
             int maxW = colW - (scrollBarActive(2) ? SCROLL_BAR_W + 8 : 10)
                     - (entity != null ? ROW_H + 6 : 4);
             String name = ellipsize(fullName, maxW);
-            graphics.drawString(this.font, name, textX, rowY + 5, TEXT_COLOR, false);
-            if (!name.equals(fullName)) {
-                queueLineTooltip(left, rowY, colW,
-                        Component.literal(fullName), mouseX, mouseY);
-            }
+            graphics.drawString(this.font, name, textX, rowY + 5,
+                    misc ? MISC_TEXT_COLOR : TEXT_COLOR, false);
         }
     }
 
